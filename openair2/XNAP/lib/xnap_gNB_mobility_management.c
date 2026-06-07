@@ -1453,3 +1453,125 @@ void free_xnap_handover_cancel(xnap_handover_cancel_t *msg)
     free(msg->candidate_cells_to_cancel);
   }
 }
+
+/**
+ * @brief XnAP Handover Success encoding
+ */
+XNAP_XnAP_PDU_t *encode_xnap_handover_success(const xnap_handover_success_t *msg)
+{
+  DevAssert(msg != NULL);
+
+  XNAP_XnAP_PDU_t *pdu = calloc_or_fail(1, sizeof(*pdu));
+
+  /* Message type */
+  pdu->present = XNAP_XnAP_PDU_PR_initiatingMessage;
+  asn1cCalloc(pdu->choice.initiatingMessage, initMsg);
+
+  initMsg->procedureCode = XNAP_ProcedureCode_id_handoverSuccess;
+  initMsg->criticality = XNAP_Criticality_reject;
+  initMsg->value.present = XNAP_InitiatingMessage__value_PR_HandoverSuccess;
+
+  XNAP_HandoverSuccess_t *out = &initMsg->value.choice.HandoverSuccess;
+
+  /* Source NG-RAN node UE XnAP ID (M) */
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_HandoverSuccess_IEs_t, ie1);
+  ie1->id = XNAP_ProtocolIE_ID_id_sourceNG_RANnodeUEXnAPID;
+  ie1->criticality = XNAP_Criticality_reject;
+  ie1->value.present = XNAP_HandoverSuccess_IEs__value_PR_NG_RANnodeUEXnAPID;
+  ie1->value.choice.NG_RANnodeUEXnAPID = msg->s_ng_node_ue_xnap_id;
+
+  /* Target NG-RAN node UE XnAP ID (M) */
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_HandoverSuccess_IEs_t, ie2);
+  ie2->id = XNAP_ProtocolIE_ID_id_targetNG_RANnodeUEXnAPID;
+  ie2->criticality = XNAP_Criticality_reject;
+  ie2->value.present = XNAP_HandoverSuccess_IEs__value_PR_NG_RANnodeUEXnAPID_1;
+  ie2->value.choice.NG_RANnodeUEXnAPID_1 = msg->t_ng_node_ue_xnap_id;
+
+  /* Requested Target Cell Global ID (M) */
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_HandoverSuccess_IEs_t, ie3);
+  ie3->id = XNAP_ProtocolIE_ID_id_requestedTargetCellGlobalID;
+  ie3->criticality = XNAP_Criticality_reject;
+  ie3->value.present = XNAP_HandoverSuccess_IEs__value_PR_Target_CGI;
+  ie3->value.choice.Target_CGI = xnap_encode_target_cgi(&msg->requested_target_cell_id);
+
+  return pdu;
+}
+
+/**
+ * @brief XnAP Handover Success decoding
+ */
+bool decode_xnap_handover_success(xnap_handover_success_t *out, const XNAP_XnAP_PDU_t *pdu)
+{
+  DevAssert(out != NULL);
+  DevAssert(pdu != NULL);
+
+  /* Check message type */
+  _EQ_CHECK_INT(pdu->present, XNAP_XnAP_PDU_PR_initiatingMessage);
+  AssertError(pdu->choice.initiatingMessage != NULL, return false, "initiatingMessage is NULL");
+  _EQ_CHECK_LONG(pdu->choice.initiatingMessage->procedureCode, XNAP_ProcedureCode_id_handoverSuccess);
+  _EQ_CHECK_INT(pdu->choice.initiatingMessage->value.present, XNAP_InitiatingMessage__value_PR_HandoverSuccess);
+
+  XNAP_HandoverSuccess_t *in = &pdu->choice.initiatingMessage->value.choice.HandoverSuccess;
+
+  XNAP_HandoverSuccess_IEs_t *ie;
+
+  /* Check presence of mandatory IEs */
+  XNAP_LIB_FIND_IE(XNAP_HandoverSuccess_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_sourceNG_RANnodeUEXnAPID, true);
+  XNAP_LIB_FIND_IE(XNAP_HandoverSuccess_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_targetNG_RANnodeUEXnAPID, true);
+  XNAP_LIB_FIND_IE(XNAP_HandoverSuccess_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_requestedTargetCellGlobalID, true);
+
+  /* Decode IEs */
+  for (int i = 0; i < in->protocolIEs.list.count; i++) {
+    DevAssert(in->protocolIEs.list.array[i]);
+    ie = in->protocolIEs.list.array[i];
+
+    switch (ie->id) {
+      case XNAP_ProtocolIE_ID_id_sourceNG_RANnodeUEXnAPID:
+        _EQ_CHECK_INT(ie->value.present, XNAP_HandoverSuccess_IEs__value_PR_NG_RANnodeUEXnAPID);
+        out->s_ng_node_ue_xnap_id = ie->value.choice.NG_RANnodeUEXnAPID;
+        break;
+
+      case XNAP_ProtocolIE_ID_id_targetNG_RANnodeUEXnAPID:
+        _EQ_CHECK_INT(ie->value.present, XNAP_HandoverSuccess_IEs__value_PR_NG_RANnodeUEXnAPID_1);
+        out->t_ng_node_ue_xnap_id = ie->value.choice.NG_RANnodeUEXnAPID_1;
+        break;
+
+      case XNAP_ProtocolIE_ID_id_requestedTargetCellGlobalID:
+        _EQ_CHECK_INT(ie->value.present, XNAP_HandoverSuccess_IEs__value_PR_Target_CGI);
+        if (!xnap_decode_target_cgi(&ie->value.choice.Target_CGI, &out->requested_target_cell_id))
+          return false;
+        break;
+
+      default:
+        AssertError(0, return false, "Unknown XnAP IE id %ld\n", ie->id);
+        break;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * @brief XnAP Handover Success equality function
+ */
+bool eq_xnap_handover_success(const xnap_handover_success_t *a, const xnap_handover_success_t *b)
+{
+  DevAssert(a != NULL);
+  DevAssert(b != NULL);
+
+  _EQ_CHECK_UINT32(a->s_ng_node_ue_xnap_id, b->s_ng_node_ue_xnap_id);
+  _EQ_CHECK_UINT32(a->t_ng_node_ue_xnap_id, b->t_ng_node_ue_xnap_id);
+
+  if (!eq_xnap_ngran_cgi(&a->requested_target_cell_id, &b->requested_target_cell_id))
+    return false;
+
+  return true;
+}
+
+/**
+ * @brief XnAP Handover Success memory management
+ */
+void free_xnap_handover_success(xnap_handover_success_t *msg)
+{
+  UNUSED(msg);
+}

@@ -702,6 +702,52 @@ static void test_xn_handover_cancel(void)
   printf("%s() successful \n", __func__);
 }
 
+/**
+ * 10. XnAP Handover Success Testing
+ */
+static void test_xn_handover_success(void)
+{
+  plmn_id_t plmn = {
+      .mcc = 208,
+      .mnc = 95,
+      .mnc_digit_length = 2,
+  };
+
+  /* ---------- create message ---------- */
+  xnap_handover_success_t orig = {
+      .s_ng_node_ue_xnap_id = 123456,
+      .t_ng_node_ue_xnap_id = 789012,
+      .requested_target_cell_id =
+          {
+              .plmn_id = plmn,
+              .nrcell_id = 0x0000000ABC,
+          },
+  };
+
+  /* ---------- encode ---------- */
+  XNAP_XnAP_PDU_t *xnenc = encode_xnap_handover_success(&orig);
+  AssertFatal(xnenc != NULL, "encode_xnap_handover_success failed");
+
+  XNAP_XnAP_PDU_t *xndec = xnap_encode_decode(xnenc);
+  xnap_msg_free(xnenc);
+
+  /* ---------- decode ---------- */
+  xnap_handover_success_t decoded = {0};
+  bool ret = decode_xnap_handover_success(&decoded, xndec);
+  AssertFatal(ret, "decode_xnap_handover_success failed");
+  xnap_msg_free(xndec);
+
+  /* ---------- equality ---------- */
+  ret = eq_xnap_handover_success(&orig, &decoded);
+  AssertFatal(ret, "XnAP Handover Success mismatch\n");
+
+  /* ---------- cleanup ---------- */
+  free_xnap_handover_success(&decoded);
+  free_xnap_handover_success(&orig);
+
+  printf("%s() successful\n", __func__);
+}
+
 int main() {
   printf("Starting XnAP Library Unit Tests...\n");
 
@@ -717,6 +763,7 @@ int main() {
   test_xn_sn_status_transfer();
   test_xn_ue_context_release();
   test_xn_handover_cancel();
+  test_xn_handover_success();
 
   printf("All XnAP tests passed!\n");
   return 0;

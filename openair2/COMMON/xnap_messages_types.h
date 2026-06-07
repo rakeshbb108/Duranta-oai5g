@@ -402,4 +402,14 @@ typedef struct {
   xnap_candidate_cell_to_cancel_t *candidate_cells_to_cancel;
 } xnap_handover_cancel_t;
 
+/* 3GPP TS 38.423 9.1.1.7 – HANDOVER SUCCESS */
+typedef struct {
+  // Source NG-RAN node UE XnAP ID (M) 
+  uint32_t s_ng_node_ue_xnap_id;
+  // Target NG-RAN node UE XnAP ID (M) 
+  uint32_t t_ng_node_ue_xnap_id;
+  // Requested Target Cell Global ID (M) 
+  xnap_ngran_cgi_t requested_target_cell_id;
+} xnap_handover_success_t;
+
 #endif /* XNAP_MESSAGES_TYPES_H_ */
