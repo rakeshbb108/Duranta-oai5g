@@ -650,6 +650,58 @@ static void test_xn_ue_context_release(void)
   printf("%s() successful \n", __func__);
 }
 
+/**
+ * 9. XnAP Handover Cancel Testing
+ */
+static void test_xn_handover_cancel(void)
+{
+  plmn_id_t plmn = {.mcc = 208, .mnc = 95, .mnc_digit_length = 2};
+
+  /* ---------- create message with candidate cells ---------- */
+  xnap_candidate_cell_to_cancel_t *cells = calloc_or_fail(2, sizeof(*cells));
+
+  cells[0].target_cgi.plmn_id = plmn;
+  cells[0].target_cgi.nrcell_id = 0x0000000ABC;
+
+  cells[1].target_cgi.plmn_id = plmn;
+  cells[1].target_cgi.nrcell_id = 0x0000000DEF;
+
+  xnap_handover_cancel_t orig = {
+      .s_ng_node_ue_xnap_id = 123456,
+      .t_ng_node_ue_xnap_id = 789012,
+      .cause =
+          {
+              .type = XNAP_CAUSE_RADIO_NETWORK,
+              .value = XNAP_CAUSE_RADIO_NETWORK_LAYER_PROCEDURE_CANCELLED,
+          },
+      .num_candidate_cells = 2,
+      .candidate_cells_to_cancel = cells,
+  };
+
+  /* ---------- encode ---------- */
+  XNAP_XnAP_PDU_t *xnenc = encode_xnap_handover_cancel(&orig);
+  AssertFatal(xnenc != NULL, "encode_xnap_handover_cancel failed");
+
+  XNAP_XnAP_PDU_t *xndec = xnap_encode_decode(xnenc);
+  xnap_msg_free(xnenc);
+
+  /* ---------- decode ---------- */
+  xnap_handover_cancel_t decoded = {0};
+  bool ret = decode_xnap_handover_cancel(&decoded, xndec);
+  AssertFatal(ret, "decode_xnap_handover_cancel failed");
+  xnap_msg_free(xndec);
+
+  /* ---------- equality ---------- */
+  ret = eq_xnap_handover_cancel(&orig, &decoded);
+  AssertFatal(ret, "XnAP Handover Cancel mismatch\n");
+
+  /* ---------- cleanup ---------- */
+  free_xnap_handover_cancel(&decoded);
+  free_xnap_handover_cancel(&orig);
+
+  printf("%s() successful \n", __func__);
+}
+
 int main() {
   printf("Starting XnAP Library Unit Tests...\n");
 
@@ -664,6 +716,7 @@ int main() {
   test_xn_handover_preparation_failure();
   test_xn_sn_status_transfer();
   test_xn_ue_context_release();
+  test_xn_handover_cancel();
 
   printf("All XnAP tests passed!\n");
   return 0;

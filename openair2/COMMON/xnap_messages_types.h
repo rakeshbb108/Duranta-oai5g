@@ -376,10 +376,30 @@ typedef struct {
 
 /* 3GPP TS 38.423 9.1.1.5 – UE CONTEXT RELEASE */
 typedef struct {
-  /* Source NG-RAN node UE XnAP ID (M) */
+  // Source NG-RAN node UE XnAP ID (M) 
   uint32_t s_ng_node_ue_xnap_id;
-  /* Target NG-RAN node UE XnAP ID (M) */
+  // Target NG-RAN node UE XnAP ID (M) 
   uint32_t t_ng_node_ue_xnap_id;
 } xnap_ue_context_release_t;
+
+/* Candidate cell to be cancelled */
+typedef struct {
+  // Target Cell Global ID (M) 
+  xnap_ngran_cgi_t target_cgi;
+} xnap_candidate_cell_to_cancel_t;
+
+/* 3GPP TS 38.423 9.1.1.6 – HANDOVER CANCEL */
+typedef struct {
+  // Source NG-RAN node UE XnAP ID (M) 
+  uint32_t s_ng_node_ue_xnap_id;
+  // Target NG-RAN node UE XnAP ID (O) 
+  uint32_t t_ng_node_ue_xnap_id;
+  // Cause (M) 
+  xnap_cause_t cause;
+  // Number of candidate cells to be cancelled 
+  uint8_t num_candidate_cells;
+  // Candidate Cells To Be Cancelled List (O, 0..8) 
+  xnap_candidate_cell_to_cancel_t *candidate_cells_to_cancel;
+} xnap_handover_cancel_t;
 
 #endif /* XNAP_MESSAGES_TYPES_H_ */

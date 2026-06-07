@@ -39,5 +39,7 @@
 #include "XNAP_DRBBStatusTransfer18bitsSN.h"
 #include "XNAP_DRBBStatusTransfer12bitsSN.h"
 
+#include "XNAP_TargetCellList-Item.h"
+
 #endif // XNAP_LIB_INCLUDES_H
 

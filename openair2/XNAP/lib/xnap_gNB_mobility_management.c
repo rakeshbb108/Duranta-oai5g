@@ -1281,3 +1281,175 @@ void free_xnap_ue_context_release(xnap_ue_context_release_t *msg)
   // Nothing to free
   UNUSED(msg);
 }
+
+/**
+ * @brief XnAP Handover Cancel encoding
+ */
+XNAP_XnAP_PDU_t *encode_xnap_handover_cancel(const xnap_handover_cancel_t *msg)
+{
+  DevAssert(msg != NULL);
+
+  XNAP_XnAP_PDU_t *pdu = calloc_or_fail(1, sizeof(*pdu));
+
+  /* Message type */
+  pdu->present = XNAP_XnAP_PDU_PR_initiatingMessage;
+  asn1cCalloc(pdu->choice.initiatingMessage, initMsg);
+  initMsg->procedureCode = XNAP_ProcedureCode_id_handoverCancel;
+  initMsg->criticality = XNAP_Criticality_reject;
+  initMsg->value.present = XNAP_InitiatingMessage__value_PR_HandoverCancel;
+
+  XNAP_HandoverCancel_t *out = &initMsg->value.choice.HandoverCancel;
+
+  /* Source NG-RAN node UE XnAP ID (M) */
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_HandoverCancel_IEs_t, ie1);
+  ie1->id = XNAP_ProtocolIE_ID_id_sourceNG_RANnodeUEXnAPID;
+  ie1->criticality = XNAP_Criticality_reject;
+  ie1->value.present = XNAP_HandoverCancel_IEs__value_PR_NG_RANnodeUEXnAPID;
+  ie1->value.choice.NG_RANnodeUEXnAPID = msg->s_ng_node_ue_xnap_id;
+
+  /* Target NG-RAN node UE XnAP ID (O) */
+  if (msg->t_ng_node_ue_xnap_id != 0) {
+    asn1cSequenceAdd(out->protocolIEs.list, XNAP_HandoverCancel_IEs_t, ie2);
+    ie2->id = XNAP_ProtocolIE_ID_id_targetNG_RANnodeUEXnAPID;
+    ie2->criticality = XNAP_Criticality_ignore;
+    ie2->value.present = XNAP_HandoverCancel_IEs__value_PR_NG_RANnodeUEXnAPID_1;
+    ie2->value.choice.NG_RANnodeUEXnAPID_1 = msg->t_ng_node_ue_xnap_id;
+  }
+
+  /* Cause (M) */
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_HandoverCancel_IEs_t, ie3);
+  ie3->id = XNAP_ProtocolIE_ID_id_Cause;
+  ie3->criticality = XNAP_Criticality_ignore;
+  ie3->value.present = XNAP_HandoverCancel_IEs__value_PR_Cause;
+  xnap_gNB_set_cause(&ie3->value.choice.Cause, &msg->cause);
+
+  /* Candidate Cells To Be Cancelled List (O) */
+  if (msg->num_candidate_cells > 0 && msg->candidate_cells_to_cancel != NULL) {
+    asn1cSequenceAdd(out->protocolIEs.list, XNAP_HandoverCancel_IEs_t, ie4);
+    ie4->id = XNAP_ProtocolIE_ID_id_targetCellsToCancel;
+    ie4->criticality = XNAP_Criticality_reject;
+    ie4->value.present = XNAP_HandoverCancel_IEs__value_PR_TargetCellList;
+
+    XNAP_TargetCellList_t *cell_list = &ie4->value.choice.TargetCellList;
+
+    for (int i = 0; i < msg->num_candidate_cells; i++) {
+      asn1cSequenceAdd(cell_list->list, XNAP_TargetCellList_Item_t, cell_item);
+      cell_item->target_cell = xnap_encode_ngran_cgi(&msg->candidate_cells_to_cancel[i].target_cgi);
+    }
+  }
+
+  return pdu;
+}
+
+/**
+ * @brief XnAP Handover Cancel decoding
+ */
+bool decode_xnap_handover_cancel(xnap_handover_cancel_t *out, const XNAP_XnAP_PDU_t *pdu)
+{
+  DevAssert(out != NULL);
+  DevAssert(pdu != NULL);
+
+  /* Check message type */
+  _EQ_CHECK_INT(pdu->present, XNAP_XnAP_PDU_PR_initiatingMessage);
+  AssertError(pdu->choice.initiatingMessage != NULL, return false, "initiatingMessage is NULL");
+  _EQ_CHECK_LONG(pdu->choice.initiatingMessage->procedureCode, XNAP_ProcedureCode_id_handoverCancel);
+  _EQ_CHECK_INT(pdu->choice.initiatingMessage->value.present, XNAP_InitiatingMessage__value_PR_HandoverCancel);
+
+  XNAP_HandoverCancel_t *in = &pdu->choice.initiatingMessage->value.choice.HandoverCancel;
+  XNAP_HandoverCancel_IEs_t *ie;
+
+  /* Check presence of mandatory IEs */
+  XNAP_LIB_FIND_IE(XNAP_HandoverCancel_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_sourceNG_RANnodeUEXnAPID, true);
+  XNAP_LIB_FIND_IE(XNAP_HandoverCancel_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_Cause, true);
+
+  /* Loop over all IEs */
+  for (int i = 0; i < in->protocolIEs.list.count; i++) {
+    DevAssert(in->protocolIEs.list.array[i]);
+    ie = in->protocolIEs.list.array[i];
+
+    switch (ie->id) {
+      case XNAP_ProtocolIE_ID_id_sourceNG_RANnodeUEXnAPID: {
+        _EQ_CHECK_INT(ie->value.present, XNAP_HandoverCancel_IEs__value_PR_NG_RANnodeUEXnAPID);
+        out->s_ng_node_ue_xnap_id = ie->value.choice.NG_RANnodeUEXnAPID;
+      } break;
+
+      case XNAP_ProtocolIE_ID_id_targetNG_RANnodeUEXnAPID: {
+        _EQ_CHECK_INT(ie->value.present, XNAP_HandoverCancel_IEs__value_PR_NG_RANnodeUEXnAPID_1);
+        out->t_ng_node_ue_xnap_id = ie->value.choice.NG_RANnodeUEXnAPID_1;
+      } break;
+
+      case XNAP_ProtocolIE_ID_id_Cause: {
+        _EQ_CHECK_INT(ie->value.present, XNAP_HandoverCancel_IEs__value_PR_Cause);
+        out->cause = decode_xnap_cause(&ie->value.choice.Cause);
+      } break;
+
+      case XNAP_ProtocolIE_ID_id_targetCellsToCancel: {
+        _EQ_CHECK_INT(ie->value.present, XNAP_HandoverCancel_IEs__value_PR_TargetCellList);
+
+        XNAP_TargetCellList_t *cell_list = &ie->value.choice.TargetCellList;
+        out->num_candidate_cells = cell_list->list.count;
+
+        if (out->num_candidate_cells > 0) {
+          out->candidate_cells_to_cancel = calloc_or_fail(out->num_candidate_cells, sizeof(*out->candidate_cells_to_cancel));
+
+          for (int j = 0; j < out->num_candidate_cells; j++) {
+            XNAP_TargetCellList_Item_t *item = cell_list->list.array[j];
+            if (!xnap_decode_ngran_cgi(&item->target_cell, &out->candidate_cells_to_cancel[j].target_cgi))
+              return false;
+          }
+        }
+      } break;
+
+      default:
+        AssertError(0, return false, "Unknown XnAP IE id %ld\n", ie->id);
+        break;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * @brief Compare two candidate cells to be cancelled for equality
+ */
+static bool eq_xnap_candidate_cell_to_cancel(const xnap_candidate_cell_to_cancel_t *a, const xnap_candidate_cell_to_cancel_t *b)
+{
+  return eq_xnap_ngran_cgi(&a->target_cgi, &b->target_cgi);
+}
+
+/**
+ * @brief XnAP Handover Cancel equality function
+ */
+bool eq_xnap_handover_cancel(const xnap_handover_cancel_t *a, const xnap_handover_cancel_t *b)
+{
+  DevAssert(a != NULL);
+  DevAssert(b != NULL);
+
+  _EQ_CHECK_UINT32(a->s_ng_node_ue_xnap_id, b->s_ng_node_ue_xnap_id);
+  _EQ_CHECK_UINT32(a->t_ng_node_ue_xnap_id, b->t_ng_node_ue_xnap_id);
+
+  if (!eq_xnap_cause(&a->cause, &b->cause))
+    return false;
+
+  _EQ_CHECK_INT(a->num_candidate_cells, b->num_candidate_cells);
+
+  for (int i = 0; i < a->num_candidate_cells; i++) {
+    if (!eq_xnap_candidate_cell_to_cancel(&a->candidate_cells_to_cancel[i], &b->candidate_cells_to_cancel[i]))
+      return false;
+  }
+
+  return true;
+}
+
+/**
+ * @brief XnAP Handover Cancel memory management
+ */
+void free_xnap_handover_cancel(xnap_handover_cancel_t *msg)
+{
+  if (!msg)
+    return;
+
+  if (msg->candidate_cells_to_cancel) {
+    free(msg->candidate_cells_to_cancel);
+  }
+}
