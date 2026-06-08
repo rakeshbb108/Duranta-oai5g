@@ -748,6 +748,89 @@ static void test_xn_handover_success(void)
   printf("%s() successful\n", __func__);
 }
 
+/**
+ * 11. XnAP RAN Paging Testing
+ */
+static void run_xn_ran_paging_roundtrip(xnap_ran_paging_t *orig)
+{
+  /* ---------- encode ---------- */
+  XNAP_XnAP_PDU_t *xnenc = encode_xnap_ran_paging(orig);
+  AssertFatal(xnenc != NULL, "encode_xnap_ran_paging failed");
+
+  XNAP_XnAP_PDU_t *xndec = xnap_encode_decode(xnenc);
+  xnap_msg_free(xnenc);
+
+  /* ---------- decode ---------- */
+  xnap_ran_paging_t decoded = {0};
+  bool ret = decode_xnap_ran_paging(&decoded, xndec);
+  AssertFatal(ret, "decode_xnap_ran_paging failed");
+  xnap_msg_free(xndec);
+
+  /* ---------- equality ---------- */
+  ret = eq_xnap_ran_paging(orig, &decoded);
+  AssertFatal(ret, "XnAP RAN Paging mismatch\n");
+
+  /* ---------- cleanup ---------- */
+  free_xnap_ran_paging(&decoded);
+}
+
+static void test_xn_ran_paging(void)
+{
+  plmn_id_t plmn = {
+      .mcc = 208,
+      .mnc = 95,
+      .mnc_digit_length = 2,
+  };
+
+  xnap_cell_identifier_t *cells = calloc_or_fail(2, sizeof(*cells));
+  cells[0] = (xnap_cell_identifier_t){.type = XNAP_CELL_ID_NR, .nr_cell_id = 0x0000000ABC};
+  cells[1] = (xnap_cell_identifier_t){.type = XNAP_CELL_ID_EUTRA, .eutra_cell_id = 0x00ABCDE};
+
+  xnap_ran_paging_t cell_list_orig = {
+      .ue_identity_index_value = 512,
+      .ue_ran_paging_identity = 0x123456789a,
+      .paging_drx = XNAP_PAGING_DRX_128,
+      .ran_paging_area =
+          {
+              .plmn = plmn,
+              .choice = XNAP_RAN_PAGING_AREA_CELL_LIST,
+              .cell_list =
+                  {
+                      .num_cells = 2,
+                      .cells = cells,
+                  },
+          },
+  };
+
+  run_xn_ran_paging_roundtrip(&cell_list_orig);
+  free_xnap_ran_paging(&cell_list_orig);
+
+  xnap_ran_area_id_t *ran_area_ids = calloc_or_fail(2, sizeof(*ran_area_ids));
+  ran_area_ids[0] = (xnap_ran_area_id_t){.tac = 0x000001};
+  ran_area_ids[1] = (xnap_ran_area_id_t){.tac = 0x000002};
+
+  xnap_ran_paging_t ran_area_id_list_orig = {
+      .ue_identity_index_value = 513,
+      .ue_ran_paging_identity = 0x223456789a,
+      .paging_drx = XNAP_PAGING_DRX_256,
+      .ran_paging_area =
+          {
+              .plmn = plmn,
+              .choice = XNAP_RAN_PAGING_AREA_RAN_AREA_ID_LIST,
+              .ran_area_id_list =
+                  {
+                      .num_ran_areas = 2,
+                      .ran_area_ids = ran_area_ids,
+                  },
+          },
+  };
+
+  run_xn_ran_paging_roundtrip(&ran_area_id_list_orig);
+  free_xnap_ran_paging(&ran_area_id_list_orig);
+
+  printf("%s() successful\n", __func__);
+}
+
 int main() {
   printf("Starting XnAP Library Unit Tests...\n");
 
@@ -764,6 +847,7 @@ int main() {
   test_xn_ue_context_release();
   test_xn_handover_cancel();
   test_xn_handover_success();
+  test_xn_ran_paging();
 
   printf("All XnAP tests passed!\n");
   return 0;

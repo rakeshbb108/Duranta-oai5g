@@ -412,4 +412,67 @@ typedef struct {
   xnap_ngran_cgi_t requested_target_cell_id;
 } xnap_handover_success_t;
 
+typedef enum {
+  XNAP_PAGING_DRX_32 = 0,
+  XNAP_PAGING_DRX_64 = 1,
+  XNAP_PAGING_DRX_128 = 2,
+  XNAP_PAGING_DRX_256 = 3,
+  XNAP_PAGING_DRX_512 = 4,
+  XNAP_PAGING_DRX_1024 = 5,
+} xnap_paging_drx_t;
+
+typedef enum { XNAP_CELL_ID_NR, XNAP_CELL_ID_EUTRA } xnap_cell_id_type_t;
+
+/* 3GPP TS 38.423 9.2.2.9 - NG-RAN Cell Identity */
+typedef struct {
+  // Cell Identifier choice (M)
+  xnap_cell_id_type_t type;
+  union {
+    // NR Cell Identity (M), 36-bit value
+    uint64_t nr_cell_id;
+    // E-UTRA Cell Identity(M), 28-bit value
+    uint32_t eutra_cell_id;
+  };
+} xnap_cell_identifier_t;
+
+/* 3GPP TS 38.423 9.2.3.39 - RAN Area ID */
+typedef struct {
+  // Tracking Area Code (M)
+  uint32_t tac;
+} xnap_ran_area_id_t;
+
+typedef enum { XNAP_RAN_PAGING_AREA_CELL_LIST, XNAP_RAN_PAGING_AREA_RAN_AREA_ID_LIST } xnap_ran_paging_area_choice_t;
+
+/* 3GPP TS 38.423 9.2.3.38 - RAN Paging Area*/
+typedef struct {
+  // PLMN ID (M)
+  plmn_id_t plmn;
+  // RAN Paging Area Choice (M)
+  xnap_ran_paging_area_choice_t choice;
+  union {
+    // Cell List
+    struct {
+      uint16_t num_cells;
+      xnap_cell_identifier_t *cells;
+    } cell_list;
+    // RAN Area ID List
+    struct {
+      uint16_t num_ran_areas;
+      xnap_ran_area_id_t *ran_area_ids;
+    } ran_area_id_list;
+  };
+} xnap_ran_paging_area_t;
+
+/* 3GPP TS 38.423 9.1.1.7 – RAN Paging */
+typedef struct {
+  // UE Identity Index Value (M), indexLength10
+  uint16_t ue_identity_index_value;
+  // UE RAN Paging Identity (M), i-RNTI-full
+  uint64_t ue_ran_paging_identity;
+  // Paging DRX (M)
+  xnap_paging_drx_t paging_drx;
+  // RAN Paging Area (M), cell-List choice
+  xnap_ran_paging_area_t ran_paging_area;
+} xnap_ran_paging_t;
+
 #endif /* XNAP_MESSAGES_TYPES_H_ */

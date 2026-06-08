@@ -1575,3 +1575,316 @@ void free_xnap_handover_success(xnap_handover_success_t *msg)
 {
   UNUSED(msg);
 }
+
+static XNAP_PagingDRX_t encode_xnap_paging_drx(xnap_paging_drx_t drx)
+{
+  switch (drx) {
+    case XNAP_PAGING_DRX_32:
+      return XNAP_PagingDRX_v32;
+    case XNAP_PAGING_DRX_64:
+      return XNAP_PagingDRX_v64;
+    case XNAP_PAGING_DRX_128:
+      return XNAP_PagingDRX_v128;
+    case XNAP_PAGING_DRX_256:
+      return XNAP_PagingDRX_v256;
+    case XNAP_PAGING_DRX_512:
+      return XNAP_PagingDRX_v512;
+    case XNAP_PAGING_DRX_1024:
+      return XNAP_PagingDRX_v1024;
+    default:
+      AssertFatal(false, "Unknown XnAP Paging DRX: %d\n", drx);
+  }
+  return XNAP_PagingDRX_v32;
+}
+
+static xnap_paging_drx_t decode_xnap_paging_drx(XNAP_PagingDRX_t drx)
+{
+  switch (drx) {
+    case XNAP_PagingDRX_v32:
+      return XNAP_PAGING_DRX_32;
+    case XNAP_PagingDRX_v64:
+      return XNAP_PAGING_DRX_64;
+    case XNAP_PagingDRX_v128:
+      return XNAP_PAGING_DRX_128;
+    case XNAP_PagingDRX_v256:
+      return XNAP_PAGING_DRX_256;
+    case XNAP_PagingDRX_v512:
+      return XNAP_PAGING_DRX_512;
+    case XNAP_PagingDRX_v1024:
+      return XNAP_PAGING_DRX_1024;
+    default:
+      AssertFatal(false, "Unknown XnAP Paging DRX: %ld\n", drx);
+  }
+  return XNAP_PAGING_DRX_32;
+}
+
+static void encode_xnap_cell_identifier(const xnap_cell_identifier_t *in, XNAP_NG_RAN_Cell_Identity_t *out)
+{
+  DevAssert(in != NULL);
+  DevAssert(out != NULL);
+
+  switch (in->type) {
+    case XNAP_CELL_ID_NR:
+      AssertFatal(in->nr_cell_id <= 0xfffffffffULL, "NR Cell Identity exceeds 36 bits: %lu\n", in->nr_cell_id);
+      out->present = XNAP_NG_RAN_Cell_Identity_PR_nr;
+      NR_CELL_ID_TO_BIT_STRING(in->nr_cell_id, &out->choice.nr);
+      break;
+    case XNAP_CELL_ID_EUTRA:
+      AssertFatal(in->eutra_cell_id <= 0x0fffffff, "E-UTRA Cell Identity exceeds 28 bits: %u\n", in->eutra_cell_id);
+      out->present = XNAP_NG_RAN_Cell_Identity_PR_e_utra;
+      EUTRA_CELL_IDENTITY_TO_BIT_STRING(in->eutra_cell_id, &out->choice.e_utra);
+      break;
+    default:
+      AssertFatal(false, "Unknown XnAP cell identifier type: %d\n", in->type);
+  }
+}
+
+static bool decode_xnap_cell_identifier(const XNAP_NG_RAN_Cell_Identity_t *in, xnap_cell_identifier_t *out)
+{
+  DevAssert(in != NULL);
+  DevAssert(out != NULL);
+
+  switch (in->present) {
+    case XNAP_NG_RAN_Cell_Identity_PR_nr:
+      out->type = XNAP_CELL_ID_NR;
+      BIT_STRING_TO_NR_CELL_IDENTITY(&in->choice.nr, out->nr_cell_id);
+      return true;
+    case XNAP_NG_RAN_Cell_Identity_PR_e_utra:
+      out->type = XNAP_CELL_ID_EUTRA;
+      BIT_STRING_TO_EUTRA_CELL_IDENTITY(&in->choice.e_utra, out->eutra_cell_id);
+      return true;
+    default:
+      PRINT_ERROR("Unsupported NG-RAN cell identity choice %d\n", in->present);
+      return false;
+  }
+}
+
+static void encode_xnap_ran_paging_area(const xnap_ran_paging_area_t *in, XNAP_RANPagingArea_t *out)
+{
+  DevAssert(in != NULL);
+  DevAssert(out != NULL);
+
+  MCC_MNC_TO_PLMNID(in->plmn.mcc, in->plmn.mnc, in->plmn.mnc_digit_length, &out->pLMN_Identity);
+
+  switch (in->choice) {
+    case XNAP_RAN_PAGING_AREA_CELL_LIST:
+      AssertFatal(in->cell_list.num_cells > 0 && in->cell_list.cells != NULL,
+                  "RAN Paging Area cell list is mandatory for cell-list choice\n");
+      out->rANPagingAreaChoice.present = XNAP_RANPagingAreaChoice_PR_cell_List;
+      asn1cCalloc(out->rANPagingAreaChoice.choice.cell_List, cell_list);
+      for (int i = 0; i < in->cell_list.num_cells; i++) {
+        asn1cSequenceAdd(cell_list->list, XNAP_NG_RAN_Cell_Identity_t, cell);
+        encode_xnap_cell_identifier(&in->cell_list.cells[i], cell);
+      }
+      break;
+    case XNAP_RAN_PAGING_AREA_RAN_AREA_ID_LIST:
+      AssertFatal(in->ran_area_id_list.num_ran_areas > 0 && in->ran_area_id_list.ran_area_ids != NULL,
+                  "RAN Paging Area ID list is mandatory for RAN-area-ID-list choice\n");
+      out->rANPagingAreaChoice.present = XNAP_RANPagingAreaChoice_PR_rANAreaID_List;
+      asn1cCalloc(out->rANPagingAreaChoice.choice.rANAreaID_List, ran_area_id_list);
+      for (int i = 0; i < in->ran_area_id_list.num_ran_areas; i++) {
+        asn1cSequenceAdd(ran_area_id_list->list, XNAP_RANAreaID_t, ran_area);
+        INT24_TO_OCTET_STRING(in->ran_area_id_list.ran_area_ids[i].tac, &ran_area->tAC);
+      }
+      break;
+    default:
+      AssertFatal(false, "Unknown XnAP RAN Paging Area choice: %d\n", in->choice);
+  }
+}
+
+static bool decode_xnap_ran_paging_area(const XNAP_RANPagingArea_t *in, xnap_ran_paging_area_t *out)
+{
+  DevAssert(in != NULL);
+  DevAssert(out != NULL);
+
+  PLMNID_TO_MCC_MNC(&in->pLMN_Identity, out->plmn.mcc, out->plmn.mnc, out->plmn.mnc_digit_length);
+
+  switch (in->rANPagingAreaChoice.present) {
+    case XNAP_RANPagingAreaChoice_PR_cell_List: {
+      AssertError(in->rANPagingAreaChoice.choice.cell_List != NULL, return false, "RANPagingArea cell list is NULL\n");
+      XNAP_NG_RAN_Cell_Identity_ListinRANPagingArea_t *cell_list = in->rANPagingAreaChoice.choice.cell_List;
+      out->choice = XNAP_RAN_PAGING_AREA_CELL_LIST;
+      out->cell_list.num_cells = cell_list->list.count;
+      AssertError(out->cell_list.num_cells > 0, return false, "RANPagingArea cell list is empty\n");
+      out->cell_list.cells = calloc_or_fail(out->cell_list.num_cells, sizeof(*out->cell_list.cells));
+      for (int i = 0; i < out->cell_list.num_cells; i++) {
+        XNAP_NG_RAN_Cell_Identity_t *cell = cell_list->list.array[i];
+        AssertError(cell != NULL, return false, "RANPagingArea cell is NULL\n");
+        if (!decode_xnap_cell_identifier(cell, &out->cell_list.cells[i]))
+          return false;
+      }
+      return true;
+    }
+    case XNAP_RANPagingAreaChoice_PR_rANAreaID_List: {
+      AssertError(in->rANPagingAreaChoice.choice.rANAreaID_List != NULL, return false, "RANPagingArea RAN Area ID list is NULL\n");
+      XNAP_RANAreaID_List_t *ran_area_id_list = in->rANPagingAreaChoice.choice.rANAreaID_List;
+      out->choice = XNAP_RAN_PAGING_AREA_RAN_AREA_ID_LIST;
+      out->ran_area_id_list.num_ran_areas = ran_area_id_list->list.count;
+      AssertError(out->ran_area_id_list.num_ran_areas > 0, return false, "RANPagingArea RAN Area ID list is empty\n");
+      out->ran_area_id_list.ran_area_ids =
+          calloc_or_fail(out->ran_area_id_list.num_ran_areas, sizeof(*out->ran_area_id_list.ran_area_ids));
+      for (int i = 0; i < out->ran_area_id_list.num_ran_areas; i++) {
+        XNAP_RANAreaID_t *ran_area = ran_area_id_list->list.array[i];
+        AssertError(ran_area != NULL, return false, "RANAreaID is NULL\n");
+        OCTET_STRING_TO_INT24(&ran_area->tAC, out->ran_area_id_list.ran_area_ids[i].tac);
+      }
+      return true;
+    }
+    default:
+      PRINT_ERROR("Unsupported RANPagingAreaChoice %d\n", in->rANPagingAreaChoice.present);
+      return false;
+  }
+}
+
+XNAP_XnAP_PDU_t *encode_xnap_ran_paging(const xnap_ran_paging_t *msg)
+{
+  DevAssert(msg != NULL);
+  AssertFatal(msg->ue_identity_index_value <= 1023, "UE Identity Index Value exceeds 10 bits: %u\n", msg->ue_identity_index_value);
+  AssertFatal(msg->ue_ran_paging_identity <= 0xffffffffffULL,
+              "UE RAN Paging Identity exceeds 40 bits: %lu\n",
+              msg->ue_ran_paging_identity);
+
+  XNAP_XnAP_PDU_t *pdu = calloc_or_fail(1, sizeof(*pdu));
+
+  pdu->present = XNAP_XnAP_PDU_PR_initiatingMessage;
+  asn1cCalloc(pdu->choice.initiatingMessage, initMsg);
+  initMsg->procedureCode = XNAP_ProcedureCode_id_rANPaging;
+  initMsg->criticality = XNAP_Criticality_ignore;
+  initMsg->value.present = XNAP_InitiatingMessage__value_PR_RANPaging;
+
+  XNAP_RANPaging_t *out = &initMsg->value.choice.RANPaging;
+
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_RANPaging_IEs_t, ie1);
+  ie1->id = XNAP_ProtocolIE_ID_id_UEIdentityIndexValue;
+  ie1->criticality = XNAP_Criticality_reject;
+  ie1->value.present = XNAP_RANPaging_IEs__value_PR_UEIdentityIndexValue;
+  ie1->value.choice.UEIdentityIndexValue.present = XNAP_UEIdentityIndexValue_PR_indexLength10;
+  UEIDENTITYINDEX_TO_BIT_STRING(msg->ue_identity_index_value, &ie1->value.choice.UEIdentityIndexValue.choice.indexLength10);
+
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_RANPaging_IEs_t, ie2);
+  ie2->id = XNAP_ProtocolIE_ID_id_UERANPagingIdentity;
+  ie2->criticality = XNAP_Criticality_ignore;
+  ie2->value.present = XNAP_RANPaging_IEs__value_PR_UERANPagingIdentity;
+  ie2->value.choice.UERANPagingIdentity.present = XNAP_UERANPagingIdentity_PR_i_RNTI_full;
+  IRNTI_TO_BIT_STRING(msg->ue_ran_paging_identity, &ie2->value.choice.UERANPagingIdentity.choice.i_RNTI_full);
+
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_RANPaging_IEs_t, ie3);
+  ie3->id = XNAP_ProtocolIE_ID_id_PagingDRX;
+  ie3->criticality = XNAP_Criticality_ignore;
+  ie3->value.present = XNAP_RANPaging_IEs__value_PR_PagingDRX;
+  ie3->value.choice.PagingDRX = encode_xnap_paging_drx(msg->paging_drx);
+
+  asn1cSequenceAdd(out->protocolIEs.list, XNAP_RANPaging_IEs_t, ie4);
+  ie4->id = XNAP_ProtocolIE_ID_id_RANPagingArea;
+  ie4->criticality = XNAP_Criticality_reject;
+  ie4->value.present = XNAP_RANPaging_IEs__value_PR_RANPagingArea;
+  encode_xnap_ran_paging_area(&msg->ran_paging_area, &ie4->value.choice.RANPagingArea);
+
+  return pdu;
+}
+
+bool decode_xnap_ran_paging(xnap_ran_paging_t *out, const XNAP_XnAP_PDU_t *pdu)
+{
+  DevAssert(out != NULL);
+  DevAssert(pdu != NULL);
+  memset(out, 0, sizeof(*out));
+
+  _EQ_CHECK_INT(pdu->present, XNAP_XnAP_PDU_PR_initiatingMessage);
+  AssertError(pdu->choice.initiatingMessage != NULL, return false, "initiatingMessage is NULL");
+  _EQ_CHECK_LONG(pdu->choice.initiatingMessage->procedureCode, XNAP_ProcedureCode_id_rANPaging);
+  _EQ_CHECK_INT(pdu->choice.initiatingMessage->value.present, XNAP_InitiatingMessage__value_PR_RANPaging);
+
+  XNAP_RANPaging_t *in = &pdu->choice.initiatingMessage->value.choice.RANPaging;
+  XNAP_RANPaging_IEs_t *ie;
+
+  XNAP_LIB_FIND_IE(XNAP_RANPaging_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_UEIdentityIndexValue, true);
+  XNAP_LIB_FIND_IE(XNAP_RANPaging_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_UERANPagingIdentity, true);
+  XNAP_LIB_FIND_IE(XNAP_RANPaging_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_PagingDRX, true);
+  XNAP_LIB_FIND_IE(XNAP_RANPaging_IEs_t, ie, &in->protocolIEs.list, XNAP_ProtocolIE_ID_id_RANPagingArea, true);
+
+  for (int i = 0; i < in->protocolIEs.list.count; i++) {
+    DevAssert(in->protocolIEs.list.array[i] != NULL);
+    ie = in->protocolIEs.list.array[i];
+    switch (ie->id) {
+      case XNAP_ProtocolIE_ID_id_UEIdentityIndexValue:
+        _EQ_CHECK_INT(ie->value.present, XNAP_RANPaging_IEs__value_PR_UEIdentityIndexValue);
+        out->ue_identity_index_value = BIT_STRING_to_uint32(&ie->value.choice.UEIdentityIndexValue.choice.indexLength10);
+        break;
+      case XNAP_ProtocolIE_ID_id_UERANPagingIdentity:
+        _EQ_CHECK_INT(ie->value.present, XNAP_RANPaging_IEs__value_PR_UERANPagingIdentity);
+        out->ue_ran_paging_identity = BIT_STRING_to_uint64(&ie->value.choice.UERANPagingIdentity.choice.i_RNTI_full);
+        break;
+      case XNAP_ProtocolIE_ID_id_PagingDRX:
+        _EQ_CHECK_INT(ie->value.present, XNAP_RANPaging_IEs__value_PR_PagingDRX);
+        out->paging_drx = decode_xnap_paging_drx(ie->value.choice.PagingDRX);
+        break;
+      case XNAP_ProtocolIE_ID_id_RANPagingArea: {
+        _EQ_CHECK_INT(ie->value.present, XNAP_RANPaging_IEs__value_PR_RANPagingArea);
+        if (!decode_xnap_ran_paging_area(&ie->value.choice.RANPagingArea, &out->ran_paging_area))
+          return false;
+      } break;
+      default:
+        AssertError(0, return false, "Unknown XnAP IE id %ld\n", ie->id);
+        break;
+    }
+  }
+
+  return true;
+}
+
+bool eq_xnap_ran_paging(const xnap_ran_paging_t *a, const xnap_ran_paging_t *b)
+{
+  DevAssert(a != NULL);
+  DevAssert(b != NULL);
+
+  _EQ_CHECK_INT(a->ue_identity_index_value, b->ue_identity_index_value);
+  _EQ_CHECK_UINT64(a->ue_ran_paging_identity, b->ue_ran_paging_identity);
+  _EQ_CHECK_INT(a->paging_drx, b->paging_drx);
+  if (!eq_xnap_plmn(&a->ran_paging_area.plmn, &b->ran_paging_area.plmn))
+    return false;
+  _EQ_CHECK_INT(a->ran_paging_area.choice, b->ran_paging_area.choice);
+  switch (a->ran_paging_area.choice) {
+    case XNAP_RAN_PAGING_AREA_CELL_LIST:
+      _EQ_CHECK_INT(a->ran_paging_area.cell_list.num_cells, b->ran_paging_area.cell_list.num_cells);
+      for (int i = 0; i < a->ran_paging_area.cell_list.num_cells; i++) {
+        const xnap_cell_identifier_t *cell_a = &a->ran_paging_area.cell_list.cells[i];
+        const xnap_cell_identifier_t *cell_b = &b->ran_paging_area.cell_list.cells[i];
+        _EQ_CHECK_INT(cell_a->type, cell_b->type);
+        if (cell_a->type == XNAP_CELL_ID_NR) {
+          _EQ_CHECK_UINT64(cell_a->nr_cell_id, cell_b->nr_cell_id);
+        } else if (cell_a->type == XNAP_CELL_ID_EUTRA) {
+          _EQ_CHECK_UINT32(cell_a->eutra_cell_id, cell_b->eutra_cell_id);
+        } else {
+          return false;
+        }
+      }
+      break;
+    case XNAP_RAN_PAGING_AREA_RAN_AREA_ID_LIST:
+      _EQ_CHECK_INT(a->ran_paging_area.ran_area_id_list.num_ran_areas, b->ran_paging_area.ran_area_id_list.num_ran_areas);
+      for (int i = 0; i < a->ran_paging_area.ran_area_id_list.num_ran_areas; i++) {
+        _EQ_CHECK_UINT32(a->ran_paging_area.ran_area_id_list.ran_area_ids[i].tac,
+                         b->ran_paging_area.ran_area_id_list.ran_area_ids[i].tac);
+      }
+      break;
+    default:
+      return false;
+  }
+
+  return true;
+}
+
+void free_xnap_ran_paging(xnap_ran_paging_t *msg)
+{
+  if (!msg)
+    return;
+  switch (msg->ran_paging_area.choice) {
+    case XNAP_RAN_PAGING_AREA_CELL_LIST:
+      free(msg->ran_paging_area.cell_list.cells);
+      break;
+    case XNAP_RAN_PAGING_AREA_RAN_AREA_ID_LIST:
+      free(msg->ran_paging_area.ran_area_id_list.ran_area_ids);
+      break;
+    default:
+      break;
+  }
+}

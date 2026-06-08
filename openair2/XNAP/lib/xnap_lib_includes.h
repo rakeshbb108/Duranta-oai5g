@@ -40,6 +40,9 @@
 #include "XNAP_DRBBStatusTransfer12bitsSN.h"
 
 #include "XNAP_TargetCellList-Item.h"
+#include "XNAP_NG-RAN-Cell-Identity.h"
+#include "XNAP_NG-RAN-Cell-Identity-ListinRANPagingArea.h"
+#include "XNAP_RANAreaID.h"
+#include "XNAP_RANAreaID-List.h"
 
 #endif // XNAP_LIB_INCLUDES_H
-
