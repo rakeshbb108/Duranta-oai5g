@@ -567,4 +567,22 @@ do {                                                     \
 #define TAC_TO_ASN1 INT16_TO_OCTET_STRING
 #define GTP_TEID_TO_ASN1 INT32_TO_OCTET_STRING
 
+#define BIT_STRING_TO_EUTRA_CELL_IDENTITY(aSN, vALUE)                                                            \
+  do {                                                                                                           \
+    DevCheck((aSN)->bits_unused == 4, (aSN)->bits_unused, 4, 0);                                                 \
+    (vALUE) = ((uint32_t)(aSN)->buf[0] << 20) | ((uint32_t)(aSN)->buf[1] << 12) | ((uint32_t)(aSN)->buf[2] << 4) \
+              | ((uint32_t)(aSN)->buf[3] >> 4);                                                                  \
+  } while (0)
+
+#define EUTRA_CELL_IDENTITY_TO_BIT_STRING(vALUE, aSN) \
+  do {                                                \
+    (aSN)->buf = calloc_or_fail(4, sizeof(uint8_t));  \
+    (aSN)->buf[0] = ((vALUE) >> 20) & 0xff;           \
+    (aSN)->buf[1] = ((vALUE) >> 12) & 0xff;           \
+    (aSN)->buf[2] = ((vALUE) >> 4) & 0xff;            \
+    (aSN)->buf[3] = ((vALUE)&0x0f) << 4;              \
+    (aSN)->size = 4;                                  \
+    (aSN)->bits_unused = 4;                           \
+  } while (0)
+
 #endif /* CONVERSIONS_H_ */
