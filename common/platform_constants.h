@@ -34,6 +34,8 @@
 #define MAX_eNB 2
 #endif
 
+//XNAP
+#define MAX_XNAP_PEERS 6
 
 /// NB-IOT
 #define NB_RB_MAX_NB_IOT (2 + 3) /* 2 from LTE_maxDRB_NB_r13 in LTE_asn_constant.h + 3 SRBs */

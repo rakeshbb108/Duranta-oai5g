@@ -10,6 +10,8 @@
 #include "common/platform_types.h"
 #include "common/platform_constants.h"
 
+#define XNAP_REGISTER_GNB_REQ(mSGpTR) (mSGpTR)->ittiMsg.xnap_register_gnb_req
+
 typedef struct {
   // PLMN Identity (M)
   plmn_id_t plmn;
@@ -449,5 +451,33 @@ typedef struct {
   /* RAN Paging Area (M) */
   xnap_ran_paging_area_t ran_paging_area;
 } xnap_ran_paging_t;
+
+typedef struct xnap_sctp_s {
+  uint16_t sctp_in_streams;
+  uint16_t sctp_out_streams;
+} xnap_sctp_t;
+
+typedef struct xnap_net_config_t {
+  char *gnb_xn_interface_ip_address;
+  uint8_t nb_of_candidate_gNBs;
+  char *candidate_gnb_xn_ip_address[MAX_XNAP_PEERS];
+  uint32_t gnb_port_for_xnc;
+  xnap_sctp_t sctp_streams;
+} xnap_net_config_t;
+
+typedef struct xnap_setup_info_s {
+  uint32_t gNB_id;
+  plmn_id_t plmn;
+  uint16_t num_tai;
+  xnap_tai_support_t *tai_support;
+  uint8_t  num_amf_regions;
+  xnap_amf_region_info_t *amf_region_info;
+} xnap_setup_info_t;
+
+typedef struct xnap_register_gnb_req_s {
+  xnap_setup_info_t setup_info;
+  xnap_net_config_t net_config;
+  char *gNB_name;
+} xnap_register_gnb_req_t;
 
 #endif /* XNAP_MESSAGES_TYPES_H_ */
