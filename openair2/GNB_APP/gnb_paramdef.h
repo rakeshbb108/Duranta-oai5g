@@ -820,6 +820,45 @@ typedef enum {
 /* L1 configuration section names   */
 #define CONFIG_STRING_L1_LIST                              "L1s"
 
+/*----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+/*                                                              Xn Interface Configuration                                                                                          */
+/*----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
+
+/* XnAP configuration section name */
+#define GNB_CONFIG_STRING_XNAP    "XNAP"
+
+/* XnAP configuration parameter indexes */
+#define GNB_CONFIG_XNAP_ENABLE_IDX                 0
+#define GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNC_IDX  1
+#define GNB_CONFIG_STRING_GNB_PORT_FOR_XNC_IDX     2
+
+/* XnAP configuration parameter names */
+#define GNB_CONFIG_STRING_XNAP_ENABLE              "ENABLE_XN_INTERFACE"
+#define GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNC      "GNB_IP_ADDRESS_FOR_XNC"
+#define GNB_CONFIG_STRING_GNB_PORT_FOR_XNC         "GNB_PORT_FOR_XNC"
+
+#define XnPARAMS_DESC { \
+  { GNB_CONFIG_STRING_XNAP_ENABLE,         "Enable or disable Xn interface support",                    PARAMFLAG_BOOL, .iptr=NULL,   .defintval=0,    TYPE_INT,    0 }, \
+  { GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNC, "Local gNB IP address used for Xn connection establishment", 0,              .strptr=NULL, .defstrval=NULL, TYPE_STRING, 0 }, \
+  { GNB_CONFIG_STRING_GNB_PORT_FOR_XNC,    "Local SCTP port used for Xn signalling",                    0,              .uptr=NULL,   .defintval=0L,   TYPE_UINT,   0 }, \
+}
+
+/* Xn Sub Section: Candidates configuration */
+#define GNB_CONFIG_STRING_XN_CANDIDATES    "Xn_Candidates"
+
+/* Xn Candidate parameter indexes */
+#define GNB_CONFIG_STRING_CANDIDATE_GNB_XN_IP_ADDRESS_IDX  0
+
+/* Xn Candidate parameter names */
+#define GNB_CONFIG_STRING_CANDIDATE_GNB_XN_ADDRESSES       "Candidate_gNB_Xn_addresses"
+#define GNB_CONFIG_STRING_CANDIDATE_GNB_XN_IP_ADDRESS      "ip"
+
+/* Xn Candidate parameter description */
+#define XN_CANDIDATE_PARAMS_DESC { \
+  { GNB_CONFIG_STRING_CANDIDATE_GNB_XN_IP_ADDRESS, "Candidate target gNB Xn IP address", 0, .strptr=NULL, .defstrval=NULL, TYPE_STRING, 0 }, \
+}
+
+/*----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 
 /*----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------*/
 /* security configuration                                                                                                                                                           */
