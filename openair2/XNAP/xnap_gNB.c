@@ -6,11 +6,49 @@
 #include "xnap_gNB.h"
 #include "xnap_common.h"
 #include "xnap_default_values.h"
+#include "lib/xnap_gNB_interface_management.h"
+#include "xnap_gNB_encoder.h"
 #include "common/utils/LOG/log.h"
 #include "common/platform_types.h"
 #include "common/utils/ocp_itti/intertask_interface.h"
 #include "openair2/COMMON/sctp_messages_types.h"
 #include "assertions.h"
+
+static void xnap_gNB_itti_send_sctp_data(instance_t instance,
+                                          sctp_assoc_t assoc_id,
+                                          uint8_t *buffer,
+                                          uint32_t length,
+                                          uint16_t stream)
+{
+  MessageDef *msg = itti_alloc_new_message(TASK_XNAP, instance, SCTP_DATA_REQ);
+  sctp_data_req_t *req = &msg->ittiMsg.sctp_data_req;
+  req->assoc_id      = assoc_id;
+  req->buffer        = buffer;
+  req->buffer_length = length;
+  req->stream        = stream;
+  itti_send_msg_to_task(TASK_SCTP, instance, msg);
+}
+
+static void xnap_gNB_generate_xn_setup_request(instance_t instance, xnap_gnb_inst_t *inst, xnap_peer_t *peer)
+{
+  /* xnap_setup_req_t and xnap_setup_info_t share the same layout */
+  const xnap_setup_req_t *req = (const xnap_setup_req_t *)&inst->setup_info;
+
+  XNAP_XnAP_PDU_t *pdu = encode_xn_setup_request(req);
+  AssertFatal(pdu != NULL, "[gNB %ld] encode_xn_setup_request() failed\n", instance);
+
+  uint8_t *buffer = NULL;
+  uint32_t length = 0;
+  int rc = xnap_gNB_encode_pdu(pdu, &buffer, &length);
+  ASN_STRUCT_FREE(asn_DEF_XNAP_XnAP_PDU, pdu);
+  AssertFatal(rc == 0, "[gNB %ld] xnap_gNB_encode_pdu() failed for XnSetupRequest\n", instance);
+
+  LOG_I(XNAP, "[gNB %ld] Sending XnSetupRequest to peer assoc_id %d (%u bytes)\n",
+        instance, peer->assoc_id, length);
+
+  /* XnSetup is non-UE-associated signalling — always stream 0 */
+  xnap_gNB_itti_send_sctp_data(instance, peer->assoc_id, buffer, length, XNAP_NONUE_STREAM_ID);
+}
 
 /* Phase 1: bind local SCTP listener socket */
 static void xnap_gNB_handle_register_gnb(instance_t instance, xnap_register_gnb_req_t *req)
@@ -112,7 +150,7 @@ static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
         "(in_streams %u, out_streams %u) — sending XnSetupRequest\n",
         instance, resp->ulp_cnx_id, resp->assoc_id, resp->in_streams, resp->out_streams);
 
-  /* TODO: trigger XnSetupRequest once the XnAP codec is wired in */
+  xnap_gNB_generate_xn_setup_request(instance, inst, peer);
 }
 
 void *xnap_task(void *args)

@@ -24,6 +24,7 @@ typedef struct xnap_peer_s {
   sctp_assoc_t      assoc_id;          /* -1 until SCTP association is up */
   uint16_t          in_streams;        /* negotiated SCTP in-streams */
   uint16_t          out_streams;       /* negotiated SCTP out-streams */
+  uint16_t          nextstream;        /* next UE-associated stream to use (cycles 1..out_streams-1) */
   uint32_t          remote_gnb_id;     /* filled after Xn Setup Response */
   xnap_setup_info_t remote_setup_info; /* filled after Xn Setup Response */
 } xnap_peer_t;
@@ -57,5 +58,11 @@ xnap_peer_t *getXnPeerByCnxId(xnap_gnb_inst_t *inst, uint16_t cnx_id);
 void xnap_peer_set_assoc_id(xnap_gnb_inst_t *inst, xnap_peer_t *peer, sctp_assoc_t assoc_id);
 
 void createXninst(instance_t instance, xnap_setup_info_t *setup_info, xnap_net_config_t *net_config);
+
+/* Stream 0 is reserved for non-UE-associated signalling (setup, reset).
+ * UE-associated procedures must use xnap_peer_next_stream() which cycles
+ * through 1..out_streams-1, matching the NGAP/X2AP convention. */
+#define XNAP_NONUE_STREAM_ID 0
+uint16_t xnap_peer_next_stream(xnap_peer_t *peer);
 
 #endif /* XNAP_COMMON_H_ */

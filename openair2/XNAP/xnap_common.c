@@ -52,6 +52,14 @@ void xnap_peer_set_assoc_id(xnap_gnb_inst_t *inst, xnap_peer_t *peer, sctp_assoc
   RB_INSERT(xnap_peer_map, &inst->peers, peer);
 }
 
+uint16_t xnap_peer_next_stream(xnap_peer_t *peer)
+{
+  peer->nextstream = (peer->nextstream + 1) % peer->out_streams;
+  if (peer->nextstream == 0 && peer->out_streams > 1)
+    peer->nextstream = 1;
+  return peer->nextstream;
+}
+
 void createXninst(instance_t instance, xnap_setup_info_t *setup_info, xnap_net_config_t *net_config)
 {
   AssertFatal(instance < sizeofArray(xnap_inst), "instance %ld exceeds limit\n", instance);
