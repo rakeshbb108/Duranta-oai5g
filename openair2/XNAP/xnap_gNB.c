@@ -84,6 +84,37 @@ static void xnap_gNB_handle_sctp_init_msg_multi_cnf(instance_t instance,
   }
 }
 
+static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
+                                                   sctp_new_association_resp_t *resp)
+{
+  xnap_gnb_inst_t *inst = getCxtXn(instance);
+  AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
+
+  xnap_peer_t *peer = getXnPeerByCnxId(inst, resp->ulp_cnx_id);
+  if (peer == NULL) {
+    LOG_E(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_RESP: no peer found for cnx_id %u\n",
+          instance, resp->ulp_cnx_id);
+    return;
+  }
+
+  if (resp->sctp_state != SCTP_STATE_ESTABLISHED) {
+    LOG_W(XNAP, "[gNB %ld] SCTP association failed for peer cnx_id %u (state %u)\n",
+          instance, resp->ulp_cnx_id, resp->sctp_state);
+    return;
+  }
+
+  /* Transition peer from cnx_id-keyed to assoc_id-keyed in the RB tree */
+  xnap_peer_set_assoc_id(inst, peer, resp->assoc_id);
+  peer->in_streams  = resp->in_streams;
+  peer->out_streams = resp->out_streams;
+
+  LOG_I(XNAP, "[gNB %ld] SCTP association established with peer cnx_id %u, assoc_id %d "
+        "(in_streams %u, out_streams %u) — sending XnSetupRequest\n",
+        instance, resp->ulp_cnx_id, resp->assoc_id, resp->in_streams, resp->out_streams);
+
+  /* TODO: trigger XnSetupRequest once the XnAP codec is wired in */
+}
+
 void *xnap_task(void *args)
 {
   UNUSED(args);
@@ -104,6 +135,10 @@ void *xnap_task(void *args)
 
       case SCTP_INIT_MSG_MULTI_CNF:
         xnap_gNB_handle_sctp_init_msg_multi_cnf(instance, &SCTP_INIT_MSG_MULTI_CNF(msg));
+        break;
+
+      case SCTP_NEW_ASSOCIATION_RESP:
+        xnap_gNB_handle_sctp_association_resp(instance, &SCTP_NEW_ASSOCIATION_RESP(msg));
         break;
 
       default:

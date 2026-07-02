@@ -22,6 +22,8 @@ typedef struct xnap_peer_s {
   RB_ENTRY(xnap_peer_s) entry;
   uint16_t          cnx_id;            /* unique per-candidate index, set at init */
   sctp_assoc_t      assoc_id;          /* -1 until SCTP association is up */
+  uint16_t          in_streams;        /* negotiated SCTP in-streams */
+  uint16_t          out_streams;       /* negotiated SCTP out-streams */
   uint32_t          remote_gnb_id;     /* filled after Xn Setup Response */
   xnap_setup_info_t remote_setup_info; /* filled after Xn Setup Response */
 } xnap_peer_t;
