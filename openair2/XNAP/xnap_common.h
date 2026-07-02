@@ -59,6 +59,8 @@ void xnap_peer_set_assoc_id(xnap_gnb_inst_t *inst, xnap_peer_t *peer, sctp_assoc
 
 void createXninst(instance_t instance, xnap_setup_info_t *setup_info, xnap_net_config_t *net_config);
 
+uint16_t xnap_fetch_add_cnx_id(void);
+
 /* Stream 0 is reserved for non-UE-associated signalling (setup, reset).
  * UE-associated procedures must use xnap_peer_next_stream() which cycles
  * through 1..out_streams-1, matching the NGAP/X2AP convention. */

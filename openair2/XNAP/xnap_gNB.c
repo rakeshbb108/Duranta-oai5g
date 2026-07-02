@@ -128,10 +128,31 @@ static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
   xnap_gnb_inst_t *inst = getCxtXn(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
-  xnap_peer_t *peer = getXnPeerByCnxId(inst, resp->ulp_cnx_id);
+  /* Case 1: peer already keyed by assoc_id (established or simultaneous-connect).
+   * A SHUTDOWN here means the remote gNB stopped after Xn was up. */
+  xnap_peer_t *peer = getXnPeerByAssoc(inst, resp->assoc_id);
+  if (peer != NULL) {
+    if (resp->sctp_state == SCTP_STATE_SHUTDOWN) {
+      LOG_W(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_RESP: peer assoc_id %d shut down\n",
+            instance, resp->assoc_id);
+      xnap_handle_xn_setup_message(instance, inst, peer, 1 /* shutdown */);
+      return;
+    }
+    /* Simultaneous-connect: remote peer opened to us first via IND, which
+     * already inserted it keyed by assoc_id.  Update streams and return —
+     * they are the initiator and will send XnSetupRequest to us. */
+    LOG_I(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_RESP: peer assoc_id %d already registered "
+          "via IND (simultaneous connect), updating streams\n", instance, resp->assoc_id);
+    peer->in_streams  = resp->in_streams;
+    peer->out_streams = resp->out_streams;
+    return;
+  }
+
+  /* Case 2: peer still keyed by cnx_id — outgoing connect attempt result. */
+  peer = getXnPeerByCnxId(inst, resp->ulp_cnx_id);
   if (peer == NULL) {
-    LOG_E(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_RESP: no peer found for cnx_id %u\n",
-          instance, resp->ulp_cnx_id);
+    LOG_E(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_RESP: no peer for assoc_id %d cnx_id %u\n",
+          instance, resp->assoc_id, resp->ulp_cnx_id);
     return;
   }
 
@@ -146,11 +167,43 @@ static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
   peer->in_streams  = resp->in_streams;
   peer->out_streams = resp->out_streams;
 
-  LOG_I(XNAP, "[gNB %ld] SCTP association established with peer cnx_id %u, assoc_id %d "
-        "(in_streams %u, out_streams %u) — sending XnSetupRequest\n",
+  LOG_I(XNAP, "[gNB %ld] SCTP association established with peer cnx_id %u assoc_id %d "
+        "(in %u out %u) — sending XnSetupRequest\n",
         instance, resp->ulp_cnx_id, resp->assoc_id, resp->in_streams, resp->out_streams);
 
   xnap_gNB_generate_xn_setup_request(instance, inst, peer);
+}
+
+static void xnap_gNB_handle_sctp_association_ind(instance_t instance,
+                                                  sctp_new_association_ind_t *ind)
+{
+  xnap_gnb_inst_t *inst = getCxtXn(instance);
+  AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
+
+  /* Guard against duplicate IND for the same assoc_id */
+  if (getXnPeerByAssoc(inst, ind->assoc_id) != NULL) {
+    LOG_W(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_IND: assoc_id %d already registered\n",
+          instance, ind->assoc_id);
+    return;
+  }
+
+  /* Incoming connection — remote peer is the initiator.
+   * Assign a cnx_id from the global counter (used only for bookkeeping;
+   * tree is keyed by assoc_id because assoc_id != -1 from the start). */
+  xnap_peer_t *peer = calloc(1, sizeof(*peer));
+  AssertFatal(peer != NULL, "calloc failed for incoming Xn peer\n");
+
+  peer->cnx_id    = xnap_fetch_add_cnx_id();
+  peer->assoc_id  = ind->assoc_id;
+  peer->in_streams  = ind->in_streams;
+  peer->out_streams = ind->out_streams;
+
+  RB_INSERT(xnap_peer_map, &inst->peers, peer);
+  inst->nb_peers++;
+
+  LOG_I(XNAP, "[gNB %ld] Incoming Xn connection: assoc_id %d cnx_id %u "
+        "(in %u out %u) — waiting for XnSetupRequest\n",
+        instance, ind->assoc_id, peer->cnx_id, ind->in_streams, ind->out_streams);
 }
 
 void *xnap_task(void *args)
@@ -177,6 +230,10 @@ void *xnap_task(void *args)
 
       case SCTP_NEW_ASSOCIATION_RESP:
         xnap_gNB_handle_sctp_association_resp(instance, &SCTP_NEW_ASSOCIATION_RESP(msg));
+        break;
+
+      case SCTP_NEW_ASSOCIATION_IND:
+        xnap_gNB_handle_sctp_association_ind(instance, &SCTP_NEW_ASSOCIATION_IND(msg));
         break;
 
       default:

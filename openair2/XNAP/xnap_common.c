@@ -52,6 +52,13 @@ void xnap_peer_set_assoc_id(xnap_gnb_inst_t *inst, xnap_peer_t *peer, sctp_assoc
   RB_INSERT(xnap_peer_map, &inst->peers, peer);
 }
 
+static uint16_t global_cnx_id = 0;
+
+uint16_t xnap_fetch_add_cnx_id(void)
+{
+  return global_cnx_id++;
+}
+
 uint16_t xnap_peer_next_stream(xnap_peer_t *peer)
 {
   peer->nextstream = (peer->nextstream + 1) % peer->out_streams;
