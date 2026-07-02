@@ -32,7 +32,8 @@ typedef struct xnap_gnb_inst_s {
   uint32_t          gnb_id;
   xnap_setup_info_t setup_info;  /* local gNB's own identity/capabilities */
   xnap_net_config_t net_config;
-  uint8_t           nb_peers;    /* number of candidates inserted into tree */
+  int               multi_sd;   /* SCTP multi-socket fd from SCTP_INIT_MSG_MULTI_CNF */
+  uint8_t           nb_peers;   /* number of candidates inserted into tree */
   RB_HEAD(xnap_peer_map, xnap_peer_s) peers;
 } xnap_gnb_inst_t;
 
