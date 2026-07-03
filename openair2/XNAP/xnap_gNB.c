@@ -4,6 +4,7 @@
 
 #include <string.h>
 #include "xnap_gNB.h"
+#include "xnap_gNB_handlers.h"
 #include "xnap_common.h"
 #include "xnap_default_values.h"
 #include "lib/xnap_gNB_interface_management.h"
@@ -14,11 +15,11 @@
 #include "openair2/COMMON/sctp_messages_types.h"
 #include "assertions.h"
 
-static void xnap_gNB_itti_send_sctp_data(instance_t instance,
-                                          sctp_assoc_t assoc_id,
-                                          uint8_t *buffer,
-                                          uint32_t length,
-                                          uint16_t stream)
+void xnap_gNB_itti_send_sctp_data(instance_t instance,
+                                   sctp_assoc_t assoc_id,
+                                   uint8_t *buffer,
+                                   uint32_t length,
+                                   uint16_t stream)
 {
   MessageDef *msg = itti_alloc_new_message(TASK_XNAP, instance, SCTP_DATA_REQ);
   sctp_data_req_t *req = &msg->ittiMsg.sctp_data_req;
@@ -159,6 +160,8 @@ static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
   if (resp->sctp_state != SCTP_STATE_ESTABLISHED) {
     LOG_W(XNAP, "[gNB %ld] SCTP association failed for peer cnx_id %u (state %u)\n",
           instance, resp->ulp_cnx_id, resp->sctp_state);
+    xnap_handle_xn_setup_message(instance, inst, peer,
+                                 resp->sctp_state == SCTP_STATE_SHUTDOWN);
     return;
   }
 
@@ -166,6 +169,7 @@ static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
   xnap_peer_set_assoc_id(inst, peer, resp->assoc_id);
   peer->in_streams  = resp->in_streams;
   peer->out_streams = resp->out_streams;
+  peer->state       = XNAP_PEER_STATE_WAITING;
 
   LOG_I(XNAP, "[gNB %ld] SCTP association established with peer cnx_id %u assoc_id %d "
         "(in %u out %u) — sending XnSetupRequest\n",
@@ -193,8 +197,9 @@ static void xnap_gNB_handle_sctp_association_ind(instance_t instance,
   xnap_peer_t *peer = calloc(1, sizeof(*peer));
   AssertFatal(peer != NULL, "calloc failed for incoming Xn peer\n");
 
-  peer->cnx_id    = xnap_fetch_add_cnx_id();
-  peer->assoc_id  = ind->assoc_id;
+  peer->cnx_id      = xnap_fetch_add_cnx_id();
+  peer->assoc_id    = ind->assoc_id;
+  peer->state       = XNAP_PEER_STATE_WAITING;
   peer->in_streams  = ind->in_streams;
   peer->out_streams = ind->out_streams;
 
@@ -204,6 +209,31 @@ static void xnap_gNB_handle_sctp_association_ind(instance_t instance,
   LOG_I(XNAP, "[gNB %ld] Incoming Xn connection: assoc_id %d cnx_id %u "
         "(in %u out %u) — waiting for XnSetupRequest\n",
         instance, ind->assoc_id, peer->cnx_id, ind->in_streams, ind->out_streams);
+}
+
+static void xnap_gNB_handle_sctp_close_association(instance_t instance,
+                                                    sctp_close_association_t *close)
+{
+  xnap_gnb_inst_t *inst = getCxtXn(instance);
+  if (inst == NULL) {
+    LOG_W(XNAP, "[gNB %ld] SCTP_CLOSE_ASSOCIATION: instance not found\n", instance);
+    return;
+  }
+
+  xnap_peer_t *peer = getXnPeerByAssoc(inst, close->assoc_id);
+  if (peer == NULL) {
+    LOG_W(XNAP, "[gNB %ld] SCTP_CLOSE_ASSOCIATION: no peer for assoc_id %d\n",
+          instance, close->assoc_id);
+    return;
+  }
+
+  xnap_handle_xn_setup_message(instance, inst, peer, 1);
+}
+
+static void xnap_gNB_handle_sctp_data_ind(instance_t instance, sctp_data_ind_t *ind)
+{
+  xnap_gNB_handle_message(instance, ind->assoc_id, ind->stream, ind->buffer, ind->buffer_length);
+  itti_free(TASK_UNKNOWN, ind->buffer);
 }
 
 void *xnap_task(void *args)
@@ -234,6 +264,14 @@ void *xnap_task(void *args)
 
       case SCTP_NEW_ASSOCIATION_IND:
         xnap_gNB_handle_sctp_association_ind(instance, &SCTP_NEW_ASSOCIATION_IND(msg));
+        break;
+
+      case SCTP_CLOSE_ASSOCIATION:
+        xnap_gNB_handle_sctp_close_association(instance, &SCTP_CLOSE_ASSOCIATION(msg));
+        break;
+
+      case SCTP_DATA_IND:
+        xnap_gNB_handle_sctp_data_ind(instance, &SCTP_DATA_IND(msg));
         break;
 
       default:
