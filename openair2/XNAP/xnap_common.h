@@ -10,6 +10,12 @@
 #include "openair2/COMMON/sctp_messages_types.h"
 #include "openair2/COMMON/xnap_messages_types.h"
 
+typedef enum {
+  XNAP_PEER_STATE_DISCONNECTED = 0, /* no active SCTP association */
+  XNAP_PEER_STATE_WAITING,          /* SCTP up, XnSetup in progress */
+  XNAP_PEER_STATE_CONNECTED,        /* XnSetup exchange complete */
+} xnap_peer_state_t;
+
 /* State of one peer gNB Xn connection.
  *
  * Dual-key ordering (mirrors the NGAP AMF pattern):
@@ -22,6 +28,7 @@ typedef struct xnap_peer_s {
   RB_ENTRY(xnap_peer_s) entry;
   uint16_t          cnx_id;            /* unique per-candidate index, set at init */
   sctp_assoc_t      assoc_id;          /* -1 until SCTP association is up */
+  xnap_peer_state_t state;
   uint16_t          in_streams;        /* negotiated SCTP in-streams */
   uint16_t          out_streams;       /* negotiated SCTP out-streams */
   uint16_t          nextstream;        /* next UE-associated stream to use (cycles 1..out_streams-1) */
