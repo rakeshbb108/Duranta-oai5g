@@ -4,3 +4,6 @@
 
 /* gNB application layer -> XNAP messages */
 MESSAGE_DEF(XNAP_REGISTER_GNB_REQ, MESSAGE_PRIORITY_MED, xnap_register_gnb_req_t, xnap_register_gnb_req)
+
+/* XNAP -> RRC messages */
+MESSAGE_DEF(XNAP_SETUP_IND, MESSAGE_PRIORITY_MED, xnap_setup_ind_t, xnap_setup_ind)

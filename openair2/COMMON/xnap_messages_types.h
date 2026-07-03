@@ -9,8 +9,10 @@
 #include "common/utils/ds/byte_array.h"
 #include "common/platform_types.h"
 #include "common/platform_constants.h"
+#include "openair2/COMMON/sctp_messages_types.h"
 
 #define XNAP_REGISTER_GNB_REQ(mSGpTR) (mSGpTR)->ittiMsg.xnap_register_gnb_req
+#define XNAP_SETUP_IND(mSGpTR)        (mSGpTR)->ittiMsg.xnap_setup_ind
 
 typedef struct {
   // PLMN Identity (M)
@@ -473,6 +475,14 @@ typedef struct xnap_setup_info_s {
   uint8_t  num_amf_regions;
   xnap_amf_region_info_t *amf_region_info;
 } xnap_setup_info_t;
+
+/* Sent from XNAP to RRC after a successful XnSetup exchange (both initiator
+ * and responder paths).  RRC uses this to register the peer as a candidate
+ * for Xn-based handover. */
+typedef struct {
+  uint32_t     gnb_id;   /* remote gNB identity */
+  sctp_assoc_t assoc_id; /* active SCTP association to that gNB */
+} xnap_setup_ind_t;
 
 typedef struct xnap_register_gnb_req_s {
   xnap_setup_info_t setup_info;
