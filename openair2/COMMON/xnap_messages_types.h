@@ -11,8 +11,9 @@
 #include "common/platform_constants.h"
 #include "openair2/COMMON/sctp_messages_types.h"
 
-#define XNAP_REGISTER_GNB_REQ(mSGpTR) (mSGpTR)->ittiMsg.xnap_register_gnb_req
-#define XNAP_SETUP_IND(mSGpTR)        (mSGpTR)->ittiMsg.xnap_setup_ind
+#define XNAP_REGISTER_GNB_REQ(mSGpTR)      (mSGpTR)->ittiMsg.xnap_register_gnb_req
+#define XNAP_SETUP_IND(mSGpTR)             (mSGpTR)->ittiMsg.xnap_setup_ind
+#define XNAP_PEER_SHUTDOWN_IND(mSGpTR)     (mSGpTR)->ittiMsg.xnap_peer_shutdown_ind
 
 typedef struct {
   // PLMN Identity (M)
@@ -483,6 +484,13 @@ typedef struct {
   uint32_t     gnb_id;   /* remote gNB identity */
   sctp_assoc_t assoc_id; /* active SCTP association to that gNB */
 } xnap_setup_ind_t;
+
+/* Sent from XNAP to RRC when a previously connected Xn peer disconnects.
+ * RRC removes the peer from the Xn candidate tree so future A3 events
+ * fall back to N2 HO until the peer reconnects and re-runs XnSetup. */
+typedef struct {
+  uint32_t gnb_id; /* remote gNB identity to remove */
+} xnap_peer_shutdown_ind_t;
 
 typedef struct xnap_register_gnb_req_s {
   xnap_setup_info_t setup_info;
