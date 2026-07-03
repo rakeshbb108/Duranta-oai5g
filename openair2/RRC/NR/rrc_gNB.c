@@ -72,6 +72,7 @@
 #include "uper_encoder.h"
 #include "utils.h"
 #include "x2ap_messages_types.h"
+#include "openair2/COMMON/xnap_messages_types.h"
 #include "xer_encoder.h"
 #include "E1AP/lib/e1ap_bearer_context_management.h"
 #include "E1AP/lib/e1ap_interface_management.h"
@@ -407,6 +408,7 @@ void openair_rrc_gNB_configuration(gNB_RRC_INST *rrc, nr_rrc_config_t *configura
   RB_INIT(&rrc->cuups);
   RB_INIT(&rrc->dus);
   RB_INIT(&rrc->cells);
+  RB_INIT(&rrc->xn_candidates);
   rrc->configuration = *configuration;
 }
 
@@ -1853,10 +1855,18 @@ static void process_Event_Based_Measurement_Report(gNB_RRC_INST *rrc,
             if (neighbourCellRSRP > best_rsrp) {
               // UE can send multiple neighbour cells A3 event report in 1 Meas Report. So, we need to find the best neighbour
               best_rsrp = neighbourCellRSRP;
-              LOG_I(NR_RRC, "HO LOG: Serving Cell RSRP: %d - Best Neighbor RSRP: %d ! Trigger N2 HO\n", servingCellRSRP, best_rsrp);
-              nr_rrc_trigger_n2_ho(rrc, ue, neighbour);
+              const rrc_xn_candidate_t *xn = rrc_find_xn_candidate(rrc, neighbour->gNB_ID);
+              if (xn) {
+                LOG_I(NR_RRC, "HO LOG: Serving RSRP: %d Best Neighbour RSRP: %d — Trigger Xn HO (assoc_id %d)\n",
+                      servingCellRSRP, best_rsrp, xn->assoc_id);
+                nr_rrc_trigger_xn_ho(rrc, ue, neighbour, xn->assoc_id);
+              } else {
+                LOG_I(NR_RRC, "HO LOG: Serving RSRP: %d Best Neighbour RSRP: %d — Trigger N2 HO (no Xn)\n",
+                      servingCellRSRP, best_rsrp);
+                nr_rrc_trigger_n2_ho(rrc, ue, neighbour);
+              }
             }
-            LOG_D(NR_RRC, "HO LOG: Trigger N2 HO for the neighbour gnb: %u cell: %lu\n", neighbour->gNB_ID, neighbour->nrcell_id);
+            LOG_D(NR_RRC, "HO LOG: HO for the neighbour gnb: %u cell: %lu\n", neighbour->gNB_ID, neighbour->nrcell_id);
           }
         } else if (target_cell && neighbour) {
           /* we know the cell and are connected to the DU! */
@@ -3878,6 +3888,13 @@ void *rrc_gnb_task(void *args_p)
 
       case F1AP_POSITIONING_MEASUREMENT_FAILURE:
         rrc_CU_process_positioning_measurement_failure(&F1AP_POSITIONING_MEASUREMENT_FAILURE(msg_p));
+        break;
+
+      /* Messages from XNAP task */
+      case XNAP_SETUP_IND:
+        rrc_add_xn_candidate(RC.nrrrc[instance],
+                             XNAP_SETUP_IND(msg_p).gnb_id,
+                             XNAP_SETUP_IND(msg_p).assoc_id);
         break;
 
       default:

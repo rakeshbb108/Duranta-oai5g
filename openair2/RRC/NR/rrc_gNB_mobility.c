@@ -26,6 +26,58 @@
 #include "openair2/E2AP/RAN_FUNCTION/O-RAN/ran_func_rc_extern.h"
 #endif
 
+/* ------------------------------------------------------------------ */
+/* Xn candidate tree                                                    */
+/* ------------------------------------------------------------------ */
+
+int rrc_xn_candidate_cmp(struct rrc_xn_candidate_s *a, struct rrc_xn_candidate_s *b)
+{
+  if (a->gnb_id < b->gnb_id) return -1;
+  if (a->gnb_id > b->gnb_id) return  1;
+  return 0;
+}
+
+RB_GENERATE(rrc_xn_cand_tree, rrc_xn_candidate_s, entry, rrc_xn_candidate_cmp);
+
+void rrc_add_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id, sctp_assoc_t assoc_id)
+{
+  /* Update assoc_id if the gNB_id is already registered (reconnect). */
+  rrc_xn_candidate_t key = {.gnb_id = gnb_id};
+  rrc_xn_candidate_t *existing = RB_FIND(rrc_xn_cand_tree, &rrc->xn_candidates, &key);
+  if (existing) {
+    existing->assoc_id = assoc_id;
+    LOG_I(NR_RRC, "Xn candidate gNB_id 0x%x updated (assoc_id %d)\n", gnb_id, assoc_id);
+    return;
+  }
+
+  rrc_xn_candidate_t *cand = calloc(1, sizeof(*cand));
+  AssertFatal(cand != NULL, "calloc failed for rrc_xn_candidate_t\n");
+  cand->gnb_id   = gnb_id;
+  cand->assoc_id = assoc_id;
+  RB_INSERT(rrc_xn_cand_tree, &rrc->xn_candidates, cand);
+  LOG_I(NR_RRC, "Xn candidate gNB_id 0x%x registered (assoc_id %d)\n", gnb_id, assoc_id);
+}
+
+const rrc_xn_candidate_t *rrc_find_xn_candidate(const gNB_RRC_INST *rrc, uint32_t gnb_id)
+{
+  rrc_xn_candidate_t key = {.gnb_id = gnb_id};
+  /* Cast away const: RB_FIND does not modify the tree */
+  return RB_FIND(rrc_xn_cand_tree, &((gNB_RRC_INST *)(uintptr_t)rrc)->xn_candidates, &key);
+}
+
+void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
+                           gNB_RRC_UE_t *ue,
+                           const nr_neighbour_cell_t *neighbour,
+                           sctp_assoc_t xn_assoc_id)
+{
+  /* TODO: implement XnAP HandoverPreparation */
+  LOG_W(NR_RRC, "UE %d: Xn HO towards gNB_id 0x%x (assoc_id %d, nrcell_id %lu) — not yet implemented\n",
+        ue->rrc_ue_id, neighbour->gNB_ID, xn_assoc_id, neighbour->nrcell_id);
+  (void)rrc;
+}
+
+/* ------------------------------------------------------------------ */
+
 nr_handover_context_t *alloc_ho_ctx(ho_ctx_type_t type)
 {
   nr_handover_context_t *ho_ctx = calloc_or_fail(1, sizeof(*ho_ctx));
