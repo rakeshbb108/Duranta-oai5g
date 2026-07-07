@@ -26,6 +26,16 @@ void xnap_handle_xn_setup_message(instance_t instance,
     if (peer->state == XNAP_PEER_STATE_CONNECTED || peer->state == XNAP_PEER_STATE_WAITING) {
       LOG_W(XNAP, "[gNB %ld] Xn peer assoc_id %d (gNB_id 0x%x) disconnected\n",
             instance, peer->assoc_id, peer->remote_gnb_id);
+
+      /* Notify RRC only if XnSetup had completed — i.e. the peer was CONNECTED
+       * and RRC holds a candidate entry for it.  WAITING peers never reached
+       * RRC so there is nothing to remove. */
+      if (peer->state == XNAP_PEER_STATE_CONNECTED && peer->remote_gnb_id != 0) {
+        MessageDef *msg = itti_alloc_new_message(TASK_XNAP, inst->instance, XNAP_PEER_SHUTDOWN_IND);
+        XNAP_PEER_SHUTDOWN_IND(msg).gnb_id = peer->remote_gnb_id;
+        itti_send_msg_to_task(TASK_RRC_GNB, inst->instance, msg);
+      }
+
       peer->state = XNAP_PEER_STATE_DISCONNECTED;
       /* TODO: release UE contexts using this Xn link */
     }

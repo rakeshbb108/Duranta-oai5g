@@ -94,6 +94,7 @@ void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
                            sctp_assoc_t xn_assoc_id);
 void rrc_add_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id, sctp_assoc_t assoc_id);
 const rrc_xn_candidate_t *rrc_find_xn_candidate(const gNB_RRC_INST *rrc, uint32_t gnb_id);
+void rrc_remove_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id);
 
 void rrc_gNB_trigger_reconfiguration_for_handover(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue, uint8_t *rrc_reconf, int rrc_reconf_len);
 

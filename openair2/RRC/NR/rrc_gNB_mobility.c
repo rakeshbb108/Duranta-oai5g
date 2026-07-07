@@ -65,6 +65,19 @@ const rrc_xn_candidate_t *rrc_find_xn_candidate(const gNB_RRC_INST *rrc, uint32_
   return RB_FIND(rrc_xn_cand_tree, &((gNB_RRC_INST *)(uintptr_t)rrc)->xn_candidates, &key);
 }
 
+void rrc_remove_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id)
+{
+  rrc_xn_candidate_t key = {.gnb_id = gnb_id};
+  rrc_xn_candidate_t *cand = RB_FIND(rrc_xn_cand_tree, &rrc->xn_candidates, &key);
+  if (!cand) {
+    LOG_W(NR_RRC, "Xn candidate gNB_id 0x%x not found for removal\n", gnb_id);
+    return;
+  }
+  RB_REMOVE(rrc_xn_cand_tree, &rrc->xn_candidates, cand);
+  free(cand);
+  LOG_I(NR_RRC, "Xn candidate gNB_id 0x%x removed (peer disconnected)\n", gnb_id);
+}
+
 void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
                            gNB_RRC_UE_t *ue,
                            const nr_neighbour_cell_t *neighbour,

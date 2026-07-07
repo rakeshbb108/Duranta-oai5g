@@ -3897,6 +3897,11 @@ void *rrc_gnb_task(void *args_p)
                              XNAP_SETUP_IND(msg_p).assoc_id);
         break;
 
+      case XNAP_PEER_SHUTDOWN_IND:
+        rrc_remove_xn_candidate(RC.nrrrc[instance],
+                                XNAP_PEER_SHUTDOWN_IND(msg_p).gnb_id);
+        break;
+
       default:
         LOG_E(NR_RRC, "[gNB %ld] Received unexpected message %s\n", instance, msg_name_p);
         break;
