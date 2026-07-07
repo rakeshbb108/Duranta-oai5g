@@ -129,9 +129,12 @@ static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
   xnap_gnb_inst_t *inst = getCxtXn(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
-  /* Case 1: peer already keyed by assoc_id (established or simultaneous-connect).
-   * A SHUTDOWN here means the remote gNB stopped after Xn was up. */
-  xnap_peer_t *peer = getXnPeerByAssoc(inst, resp->assoc_id);
+  /* Case 1: peer already keyed by real assoc_id (established or simultaneous-connect).
+   * assoc_id == -1 means SCTP never formed an association (e.g. UNREACHABLE);
+   * skip this lookup entirely — the peer is still cnx_id-keyed, handled by Case 2. */
+  xnap_peer_t *peer = NULL;
+  if (resp->assoc_id != (sctp_assoc_t)-1)
+    peer = getXnPeerByAssoc(inst, resp->assoc_id);
   if (peer != NULL) {
     if (resp->sctp_state == SCTP_STATE_SHUTDOWN) {
       LOG_W(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_RESP: peer assoc_id %d shut down\n",
@@ -139,9 +142,14 @@ static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
       xnap_handle_xn_setup_message(instance, inst, peer, 1 /* shutdown */);
       return;
     }
-    /* Simultaneous-connect: remote peer opened to us first via IND, which
-     * already inserted it keyed by assoc_id.  Update streams and return —
-     * they are the initiator and will send XnSetupRequest to us. */
+    if (resp->sctp_state != SCTP_STATE_ESTABLISHED) {
+      LOG_W(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_RESP: peer assoc_id %d unexpected state %u\n",
+            instance, resp->assoc_id, resp->sctp_state);
+      xnap_handle_xn_setup_message(instance, inst, peer, 1 /* treat as shutdown */);
+      return;
+    }
+    /* Simultaneous-connect: remote opened to us first via IND, already keyed by assoc_id.
+     * Update streams and return — they are the initiator and will send XnSetupRequest. */
     LOG_I(XNAP, "[gNB %ld] SCTP_NEW_ASSOCIATION_RESP: peer assoc_id %d already registered "
           "via IND (simultaneous connect), updating streams\n", instance, resp->assoc_id);
     peer->in_streams  = resp->in_streams;
@@ -158,10 +166,10 @@ static void xnap_gNB_handle_sctp_association_resp(instance_t instance,
   }
 
   if (resp->sctp_state != SCTP_STATE_ESTABLISHED) {
-    LOG_W(XNAP, "[gNB %ld] SCTP association failed for peer cnx_id %u (state %u)\n",
-          instance, resp->ulp_cnx_id, resp->sctp_state);
-    xnap_handle_xn_setup_message(instance, inst, peer,
-                                 resp->sctp_state == SCTP_STATE_SHUTDOWN);
+    LOG_W(XNAP, "[gNB %ld] SCTP association failed for peer cnx_id %u (%s)\n",
+          instance, resp->ulp_cnx_id,
+          resp->sctp_state == SCTP_STATE_SHUTDOWN ? "shutdown" : "unreachable");
+    xnap_handle_xn_setup_message(instance, inst, peer, 1 /* mark disconnected */);
     return;
   }
 
