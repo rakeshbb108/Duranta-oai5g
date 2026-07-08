@@ -18,6 +18,7 @@
 #include "common/utils/LOG/log.h"
 #include "common/utils/ds/byte_array.h"
 #include "assertions.h"
+#include "openair2/XNAP/xnap_ids.h"
 #include "intertask_interface.h"
 #include "aper_encoder.h"
 
@@ -60,6 +61,9 @@ void rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
     LOG_E(NR_RRC, "UE %d: no Xn connection to gNB_ID 0x%x\n", UE->rrc_ue_id, neighbour->gNB_ID);
     return;
   }
+
+  /* Allocate the source XnAP UE ID carried in the HandoverRequest */
+  UE->ho_context->source->src_ue_xnap_id = xnap_alloc_ue_id();
 
   /* Build target CGI */
   xnap_ngran_cgi_t target_cgi = {
@@ -183,9 +187,10 @@ void rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
     .ue_history_info        = history,
     .rrc_ue_id              = UE->rrc_ue_id,
     .target_assoc_id        = xn->assoc_id,
+    .s_ng_node_ue_xnap_id   = UE->ho_context->source->src_ue_xnap_id,
   };
 
-  LOG_I(NR_RRC, "UE %d: sending XNAP_HANDOVER_REQ to gNB_ID 0x%x (assoc_id %d)\n",
-        UE->rrc_ue_id, neighbour->gNB_ID, xn->assoc_id);
+  LOG_I(NR_RRC, "UE %d: sending XNAP_HANDOVER_REQ to gNB_ID 0x%x (assoc_id %d) s_xnap_ue_id %u\n",
+        UE->rrc_ue_id, neighbour->gNB_ID, xn->assoc_id, UE->ho_context->source->src_ue_xnap_id);
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
 }
