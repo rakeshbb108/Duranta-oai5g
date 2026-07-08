@@ -43,6 +43,8 @@ typedef struct nr_ho_source_cu {
   ho_status_transfer_t ho_status_transfer;
   /// old (source) downlink tunnel
   gtpu_tunnel_t old_du_tunnel_config;
+  /* Xn HO routing: allocated when sending HandoverRequest */
+  uint32_t     src_ue_xnap_id; /* source NG-RAN node UE XnAP ID */
 } nr_ho_source_cu_t;
 
 /* acknowledgement of handover request. buf+len is the RRC Reconfiguration */

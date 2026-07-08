@@ -213,6 +213,39 @@ static int xnap_gNB_handle_xn_setup_failure(instance_t instance,
 }
 
 /* ------------------------------------------------------------------ */
+/* Handover Preparation handlers                                        */
+/* ------------------------------------------------------------------ */
+
+/* Target gNB: receives HandoverRequest from source — decode and forward to RRC */
+static int xnap_gNB_handle_handover_request(instance_t instance,
+                                                 sctp_assoc_t assoc_id,
+                                                 uint32_t stream,
+                                                 xnap_gnb_inst_t *inst,
+                                                 xnap_peer_t *peer,
+                                                 XNAP_XnAP_PDU_t *pdu)
+{
+  (void)stream;
+  (void)peer;
+  LOG_I(XNAP, "[gNB %ld] Received HandoverRequest from assoc_id %d\n", instance, assoc_id);
+
+  MessageDef *msg = itti_alloc_new_message(TASK_XNAP, inst->instance, XNAP_HANDOVER_REQ);
+  xnap_handover_req_t *req = &XNAP_HANDOVER_REQ(msg);
+
+  if (!decode_xnap_handover_request(req, pdu)) {
+    LOG_E(XNAP, "[gNB %ld] Failed to decode HandoverRequest from assoc_id %d\n",
+          instance, assoc_id);
+    itti_free(TASK_XNAP, msg);
+    return -1;
+  }
+
+  /* Pass the source assoc_id so RRC can route the ACK back */
+  req->target_assoc_id = assoc_id;
+
+  itti_send_msg_to_task(TASK_RRC_GNB, inst->instance, msg);
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Callback table                                                       */
 /*                                                                      */
 /* Indexed by [procedureCode][direction-1] where direction is:          */
@@ -223,7 +256,7 @@ static int xnap_gNB_handle_xn_setup_failure(instance_t instance,
 #define XNAP_NUM_PROC_CODES 38
 
 static const xnap_message_decoded_callback xnap_messages_callback[XNAP_NUM_PROC_CODES][3] = {
-  /*  0 handoverPreparation                             */ {0, 0, 0},
+  /*  0 handoverPreparation                             */ {xnap_gNB_handle_handover_request, 0, 0},
   /*  1 sNStatusTransfer                                */ {0, 0, 0},
   /*  2 handoverCancel                                  */ {0, 0, 0},
   /*  3 retrieveUEContext                               */ {0, 0, 0},

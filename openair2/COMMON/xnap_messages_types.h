@@ -11,9 +11,10 @@
 #include "common/platform_constants.h"
 #include "openair2/COMMON/sctp_messages_types.h"
 
-#define XNAP_REGISTER_GNB_REQ(mSGpTR)      (mSGpTR)->ittiMsg.xnap_register_gnb_req
-#define XNAP_SETUP_IND(mSGpTR)             (mSGpTR)->ittiMsg.xnap_setup_ind
-#define XNAP_PEER_SHUTDOWN_IND(mSGpTR)     (mSGpTR)->ittiMsg.xnap_peer_shutdown_ind
+#define XNAP_REGISTER_GNB_REQ(mSGpTR)     (mSGpTR)->ittiMsg.xnap_register_gnb_req
+#define XNAP_SETUP_IND(mSGpTR)            (mSGpTR)->ittiMsg.xnap_setup_ind
+#define XNAP_PEER_SHUTDOWN_IND(mSGpTR)    (mSGpTR)->ittiMsg.xnap_peer_shutdown_ind
+#define XNAP_HANDOVER_REQ(mSGpTR)         (mSGpTR)->ittiMsg.xnap_handover_req
 
 typedef struct {
   // PLMN Identity (M)
@@ -304,6 +305,9 @@ typedef struct {
   // UE History Information (M)
   uint8_t num_last_visited_cells;
   ue_history_info_t *ue_history_info;
+  /* Routing fields — not part of the XnAP PDU */
+  uint32_t     rrc_ue_id;       /* RRC UE identity at source, used to create XNAP↔RRC mapping */
+  sctp_assoc_t target_assoc_id; /* SCTP association to the target gNB */
 } xnap_handover_req_t;
 
 /* QoS Flows Admitted Item */
