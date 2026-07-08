@@ -1859,7 +1859,7 @@ static void process_Event_Based_Measurement_Report(gNB_RRC_INST *rrc,
               if (xn) {
                 LOG_I(NR_RRC, "HO LOG: Serving RSRP: %d Best Neighbour RSRP: %d — Trigger Xn HO (assoc_id %d)\n",
                       servingCellRSRP, best_rsrp, xn->assoc_id);
-                nr_rrc_trigger_xn_ho(rrc, ue, neighbour, xn->assoc_id);
+                nr_rrc_trigger_xn_ho(rrc, ue, neighbour);
               } else {
                 LOG_I(NR_RRC, "HO LOG: Serving RSRP: %d Best Neighbour RSRP: %d — Trigger N2 HO (no Xn)\n",
                       servingCellRSRP, best_rsrp);

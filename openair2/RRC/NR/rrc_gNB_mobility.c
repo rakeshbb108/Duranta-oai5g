@@ -21,6 +21,7 @@
 #include "NR_DL-DCCH-MessageType.h"
 #include "rrc_cell_management.h"
 #include "openair2/RRC/NR/rrc_gNB_mobility.h"
+#include "rrc_gNB_XNAP.h"
 
 #ifdef E2_AGENT
 #include "openair2/E2AP/RAN_FUNCTION/O-RAN/ran_func_rc_extern.h"
@@ -76,17 +77,6 @@ void rrc_remove_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id)
   RB_REMOVE(rrc_xn_cand_tree, &rrc->xn_candidates, cand);
   free(cand);
   LOG_I(NR_RRC, "Xn candidate gNB_id 0x%x removed (peer disconnected)\n", gnb_id);
-}
-
-void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
-                           gNB_RRC_UE_t *ue,
-                           const nr_neighbour_cell_t *neighbour,
-                           sctp_assoc_t xn_assoc_id)
-{
-  /* TODO: implement XnAP HandoverPreparation */
-  LOG_W(NR_RRC, "UE %d: Xn HO towards gNB_id 0x%x (assoc_id %d, nrcell_id %lu) — not yet implemented\n",
-        ue->rrc_ue_id, neighbour->gNB_ID, xn_assoc_id, neighbour->nrcell_id);
-  (void)rrc;
 }
 
 /* ------------------------------------------------------------------ */
@@ -426,7 +416,7 @@ static byte_array_t rrc_gNB_generate_HandoverPreparationInformation(gNB_RRC_INST
   byte_array_t hoPrepInfo = get_HandoverPreparationInformation(&params);
   free_RRCReconfiguration_params(params);
 
-  if (hoPrepInfo.len < 0) {
+  if (hoPrepInfo.len <= 0) {
     LOG_E(NR_RRC, "HandoverPreparationInformation generation failed for UE %d\n", ue->rrc_ue_id);
     return hoPrepInfo;
   }
@@ -717,6 +707,102 @@ void nr_HO_N2_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t
   }
 
   nr_rrc_trigger_n2_ho(rrc, UE, neighbour);
+}
+
+static void nr_rrc_xn_ho_cancel(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
+{
+  /* TODO: send XnAP HandoverCancel to target gNB */
+  LOG_W(NR_RRC, "UE %d: Xn HO cancel triggered — not yet implemented\n", UE->rrc_ue_id);
+  (void)rrc;
+}
+
+/** @brief Trigger Xn handover on source gNB:
+ *         1) Prepare RRC Container with HandoverPreparationInformation message
+ *         2) send XNAP HandoverRequest message */
+void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
+                           gNB_RRC_UE_t *ue,
+                           const nr_neighbour_cell_t *neighbour)
+{
+  bool has_active_pdu = false;
+  FOR_EACH_SEQ_ARR (rrc_pdu_session_param_t *, p, &ue->pduSessions) {
+    if (p->status == PDU_SESSION_STATUS_ESTABLISHED) {
+      has_active_pdu = true;
+      break;
+    }
+  }
+  if (!has_active_pdu) {
+    LOG_W(NR_RRC, "UE %d: Xn HO not triggered — no active PDU sessions\n", ue->rrc_ue_id);
+    return;
+  }
+
+  byte_array_t hoPrepInfo = rrc_gNB_generate_HandoverPreparationInformation(rrc, ue);
+  if (hoPrepInfo.len <= 0) {
+    free_byte_array(hoPrepInfo);
+    LOG_E(NR_RRC, "UE %d: Xn HO failed — HandoverPreparationInformation encoding failed\n",
+          ue->rrc_ue_id);
+    return;
+  }
+
+  if (ue->ho_context != NULL) {
+    LOG_E(NR_RRC, "UE %d: ongoing handover, cannot trigger new Xn HO\n", ue->rrc_ue_id);
+    free_byte_array(hoPrepInfo);
+    return;
+  }
+
+  ue->ho_context = alloc_ho_ctx(HO_CTX_SOURCE);
+  nr_rrc_cell_container_t *source_cell = rrc_get_pcell_for_ue(rrc, ue);
+  if (source_cell == NULL) {
+    LOG_E(NR_RRC, "UE %d: Xn HO failed — source cell not found\n", ue->rrc_ue_id);
+    free_byte_array(hoPrepInfo);
+    return;
+  }
+  ue->ho_context->source->cell = source_cell;
+  ue->ho_context->source->ho_cancel = nr_rrc_xn_ho_cancel;
+
+  rrc_gNB_send_XNAP_HANDOVER_REQUEST(rrc, ue, neighbour, hoPrepInfo);
+  free_byte_array(hoPrepInfo);
+}
+
+void nr_HO_Xn_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t rrc_ue_id)
+{
+  rrc_gNB_ue_context_t *ue_context_p = rrc_gNB_get_ue_context(rrc, rrc_ue_id);
+  if (ue_context_p == NULL) {
+    LOG_E(NR_RRC, "Xn HO trigger failed for UE %d: UE context not found\n", rrc_ue_id);
+    return;
+  }
+  gNB_RRC_UE_t *UE = &ue_context_p->ue_context;
+
+  nr_rrc_cell_container_t *pcell = rrc_get_pcell_for_ue(rrc, UE);
+  if (pcell == NULL) {
+    LOG_E(NR_RRC, "Xn HO trigger failed for UE %d: unknown serving cell\n", rrc_ue_id);
+    return;
+  }
+
+  const neighbour_cell_configuration_t *cell = get_neighbour_cell_config(rrc, pcell->info.cell_id);
+  if (cell == NULL) {
+    LOG_E(NR_RRC,
+          "Xn HO trigger failed for UE %d: no neighbour config for cell_id %lu\n",
+          rrc_ue_id, pcell->info.cell_id);
+    return;
+  }
+
+  const nr_neighbour_cell_t *neighbour = get_neighbour_cell_by_pci(cell, neighbour_pci);
+  if (neighbour == NULL) {
+    LOG_E(NR_RRC, "Xn HO trigger failed for UE %d: no neighbour with PCI=%d\n", rrc_ue_id, neighbour_pci);
+    return;
+  }
+
+  const rrc_xn_candidate_t *xn = rrc_find_xn_candidate(rrc, neighbour->gNB_ID);
+  if (!xn) {
+    LOG_W(NR_RRC,
+          "Xn HO trigger failed for UE %d: no Xn connection to gNB_ID 0x%x (target PCI=%d)\n",
+          rrc_ue_id, neighbour->gNB_ID, neighbour_pci);
+    return;
+  }
+
+  LOG_I(NR_RRC, "UE %d: triggering Xn HO, source PCI=%d to neighbour PCI=%d (assoc_id %d)\n",
+        rrc_ue_id, pcell->info.pci, neighbour_pci, xn->assoc_id);
+  nr_rrc_trigger_xn_ho(rrc, UE, neighbour);
 }
 
 // This function detects if there are at least two different ssbFrequency values, and if so, returns meas_timing_config;

@@ -90,8 +90,7 @@ void nr_rrc_n2_ho_failure(gNB_RRC_INST *rrc, uint32_t gnb_ue_id, ngap_handover_f
 void nr_rrc_trigger_n2_ho(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue, const nr_neighbour_cell_t *neighbour_config);
 void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
                            gNB_RRC_UE_t *ue,
-                           const nr_neighbour_cell_t *neighbour,
-                           sctp_assoc_t xn_assoc_id);
+                           const nr_neighbour_cell_t *neighbour);
 void rrc_add_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id, sctp_assoc_t assoc_id);
 const rrc_xn_candidate_t *rrc_find_xn_candidate(const gNB_RRC_INST *rrc, uint32_t gnb_id);
 void rrc_remove_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id);
@@ -109,5 +108,6 @@ bool nr_rrc_update_cell_assoc_after_ho(gNB_RRC_UE_t *UE);
 const nr_neighbour_cell_t *get_neighbour_cell_by_pci(const neighbour_cell_configuration_t *cell, int pci);
 void nr_HO_F1_trigger_telnet(gNB_RRC_INST *rrc, uint32_t rrc_ue_id);
 void nr_HO_N2_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t rrc_ue_id);
+void nr_HO_Xn_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t rrc_ue_id);
 
 #endif /* RRC_GNB_MOBILITY_H_ */

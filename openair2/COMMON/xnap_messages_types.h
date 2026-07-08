@@ -273,10 +273,18 @@ typedef struct {
   xnap_pdusession_resources_tobe_setup_item_t *pdusession_resources_tobe_setup_list;
 } xnap_ue_context_info_t;
 
+/* Mirrors XNAP_LastVisitedCell_Item_PR — kept in COMMON so RRC can set the type
+ * without depending on ASN.1 generated headers. */
+typedef enum {
+  XNAP_LAST_VISITED_CELL_NOTHING  = 0,
+  XNAP_LAST_VISITED_CELL_NR       = 1,
+  XNAP_LAST_VISITED_CELL_EUTRAN   = 2,
+} xnap_last_visited_cell_type_t;
+
 /* Last Visited Cell Information */
 typedef struct {
   // Last Visited Cell Type
-  uint8_t xnap_cell_type;
+  xnap_last_visited_cell_type_t xnap_cell_type;
   // 3GPP TS 38.413 9.3.1.97 Last Visited NG-RAN Cell Information
   byte_array_t last_visited_cell_info;
 } ue_history_info_t;
