@@ -6,6 +6,7 @@
 #include "xnap_gNB.h"
 #include "xnap_common.h"
 #include "xnap_gNB_encoder.h"
+#include "xnap_ids.h"
 #include "lib/xnap_gNB_interface_management.h"
 #include "lib/xnap_gNB_mobility_management.h"
 #include "aper_decoder.h"
@@ -216,6 +217,48 @@ static int xnap_gNB_handle_xn_setup_failure(instance_t instance,
 /* Handover Preparation handlers                                        */
 /* ------------------------------------------------------------------ */
 
+/* Source gNB: receives HandoverRequestAck from target — decode, look up rrc_ue_id, forward to RRC */
+static int xnap_gNB_handle_handover_request_acknowledge(instance_t instance,
+                                                         sctp_assoc_t assoc_id,
+                                                         uint32_t stream,
+                                                         xnap_gnb_inst_t *inst,
+                                                         xnap_peer_t *peer,
+                                                         XNAP_XnAP_PDU_t *pdu)
+{
+  (void)stream;
+  (void)peer;
+  LOG_I(XNAP, "[gNB %ld] Received HandoverRequestAck from assoc_id %d\n", instance, assoc_id);
+
+  xnap_handover_req_ack_t ack = {0};
+  if (!decode_xnap_handover_request_acknowledge(&ack, pdu)) {
+    LOG_E(XNAP, "[gNB %ld] Failed to decode HandoverRequestAck from assoc_id %d\n",
+          instance, assoc_id);
+    return -1;
+  }
+
+  /* Look up source UE data using s_ng_node_ue_xnap_id */
+  if (!xnap_exists_ue_data(ack.s_ng_node_ue_xnap_id)) {
+    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: unknown s_xnap_ue_id %u\n",
+          instance, ack.s_ng_node_ue_xnap_id);
+    free_xnap_handover_request_acknowledge(&ack);
+    return -1;
+  }
+  xnap_ue_data_t ue_data = xnap_get_ue_data(ack.s_ng_node_ue_xnap_id);
+
+  /* Populate routing fields for RRC */
+  ack.rrc_ue_id       = ue_data.rrc_ue_id;
+  ack.source_assoc_id = assoc_id; /* not used by source RRC but fill for consistency */
+
+  MessageDef *msg = itti_alloc_new_message(TASK_XNAP, inst->instance, XNAP_HANDOVER_REQ_ACK);
+  XNAP_HANDOVER_REQ_ACK(msg) = ack;
+
+  LOG_I(XNAP, "[gNB %ld] HandoverRequestAck: rrc_ue_id %u s_xnap_ue_id %u t_xnap_ue_id %u — notifying RRC\n",
+        instance, ue_data.rrc_ue_id, ack.s_ng_node_ue_xnap_id, ack.t_ng_node_ue_xnap_id);
+
+  itti_send_msg_to_task(TASK_RRC_GNB, inst->instance, msg);
+  return 0;
+}
+
 /* Target gNB: receives HandoverRequest from source — decode and forward to RRC */
 static int xnap_gNB_handle_handover_request(instance_t instance,
                                                  sctp_assoc_t assoc_id,
@@ -256,7 +299,7 @@ static int xnap_gNB_handle_handover_request(instance_t instance,
 #define XNAP_NUM_PROC_CODES 38
 
 static const xnap_message_decoded_callback xnap_messages_callback[XNAP_NUM_PROC_CODES][3] = {
-  /*  0 handoverPreparation                             */ {xnap_gNB_handle_handover_request, 0, 0},
+  /*  0 handoverPreparation                             */ {xnap_gNB_handle_handover_request, xnap_gNB_handle_handover_request_acknowledge, 0},
   /*  1 sNStatusTransfer                                */ {0, 0, 0},
   /*  2 handoverCancel                                  */ {0, 0, 0},
   /*  3 retrieveUEContext                               */ {0, 0, 0},

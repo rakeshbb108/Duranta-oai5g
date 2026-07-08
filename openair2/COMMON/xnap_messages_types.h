@@ -15,6 +15,7 @@
 #define XNAP_SETUP_IND(mSGpTR)            (mSGpTR)->ittiMsg.xnap_setup_ind
 #define XNAP_PEER_SHUTDOWN_IND(mSGpTR)    (mSGpTR)->ittiMsg.xnap_peer_shutdown_ind
 #define XNAP_HANDOVER_REQ(mSGpTR)         (mSGpTR)->ittiMsg.xnap_handover_req
+#define XNAP_HANDOVER_REQ_ACK(mSGpTR)     (mSGpTR)->ittiMsg.xnap_handover_req_ack
 
 typedef struct {
   // PLMN Identity (M)
@@ -337,6 +338,9 @@ typedef struct {
   // Target NG-RAN node To Source NG-RAN node Transparent Container (M)
   // (3GPP TS 38.331 11.2.2 HandoverCommand message )
   byte_array_t target2source;
+  /* Routing fields — not part of the XnAP PDU */
+  uint32_t     rrc_ue_id;       /* RRC UE identity (target: target UE ID; source: looked up from s_xnap_ue_id) */
+  sctp_assoc_t source_assoc_id; /* SCTP association to the source gNB (target: for sending ACK) */
 } xnap_handover_req_ack_t;
 
 /* 3GPP TS 38.423 9.1.1.3 – Handover Preparation Failure */
