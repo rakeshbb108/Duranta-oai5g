@@ -502,6 +502,14 @@ int rrc_gNB_process_NGAP_INITIAL_CONTEXT_SETUP_REQ(MessageDef *msg_p, instance_t
 
   UE->amf_ue_ngap_id = req->amf_ue_ngap_id;
 
+  if (req->amf_ng_ip.ipv4) {
+    struct in_addr ipv4_bin;
+    if (inet_pton(AF_INET, req->amf_ng_ip.ipv4_address, &ipv4_bin) == 1) {
+      memcpy(UE->amf_ng_ip.buffer, &ipv4_bin, 4);
+      UE->amf_ng_ip.length = 4;
+    }
+  }
+
   // Directly copy the entire guami structure
   UE->ue_guami = req->guami;
 
@@ -658,7 +666,7 @@ void rrc_gNB_send_NGAP_INITIAL_CONTEXT_SETUP_FAIL(uint32_t gnb, const ngap_cause
   itti_send_msg_to_task(TASK_NGAP, 0, msg_p);
 }
 
-static NR_CipheringAlgorithm_t rrc_gNB_select_ciphering(const gNB_RRC_INST *rrc, uint16_t algorithms)
+NR_CipheringAlgorithm_t rrc_gNB_select_ciphering(const gNB_RRC_INST *rrc, uint16_t algorithms)
 {
   int i;
   /* preset nea0 as fallback */
@@ -691,7 +699,7 @@ static NR_CipheringAlgorithm_t rrc_gNB_select_ciphering(const gNB_RRC_INST *rrc,
   return ret;
 }
 
-static e_NR_IntegrityProtAlgorithm rrc_gNB_select_integrity(const gNB_RRC_INST *rrc, uint16_t algorithms)
+e_NR_IntegrityProtAlgorithm rrc_gNB_select_integrity(const gNB_RRC_INST *rrc, uint16_t algorithms)
 {
   int i;
   /* preset nia0 as fallback */
