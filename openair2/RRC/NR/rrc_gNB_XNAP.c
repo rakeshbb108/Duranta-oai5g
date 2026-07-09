@@ -365,3 +365,29 @@ void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byt
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg);
 }
 
+/* @brief Source gNB processes Handover Request Acknowledge from the target gNB:
+ *  stores target routing fields and sends the HandoverCommand to the UE. */
+void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handover_req_ack_t *msg)
+{
+  rrc_gNB_ue_context_t *ue_context_p = rrc_gNB_get_ue_context(rrc, msg->rrc_ue_id);
+  if (!ue_context_p) {
+    LOG_W(NR_RRC, "Xn HandoverRequestAck: unknown rrc_ue_id %u\n", msg->rrc_ue_id);
+    return;
+  }
+  gNB_RRC_UE_t *UE = &ue_context_p->ue_context;
+
+  UE->ho_context->source->tar_ue_xnap_id = msg->t_ng_node_ue_xnap_id;
+  UE->ho_context->source->tar_assoc_id   = msg->source_assoc_id;
+
+  byte_array_t buffer = doRRCReconfiguration_from_HandoverCommand(msg->target2source);
+  if (!buffer.buf || buffer.len == 0) {
+    LOG_E(NR_RRC, "UE %d: failed to decode HandoverCommand from Xn HO Request Ack\n", UE->rrc_ue_id);
+    free_byte_array(buffer);
+    return;
+  }
+
+  rrc_gNB_trigger_reconfiguration_for_handover(rrc, UE, buffer.buf, buffer.len);
+  LOG_A(NR_RRC, "Xn HO: sent RRCReconfiguration (HO Command) to UE %u/RNTI %04x\n",
+        UE->rrc_ue_id, UE->rnti);
+  free_byte_array(buffer);
+}
