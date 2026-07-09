@@ -45,6 +45,9 @@ typedef struct nr_ho_source_cu {
   gtpu_tunnel_t old_du_tunnel_config;
   /* Xn HO routing: allocated when sending HandoverRequest */
   uint32_t     src_ue_xnap_id; /* source NG-RAN node UE XnAP ID */
+  /* Xn HO routing: set after receiving HandoverRequestAcknowledge */
+  uint32_t     tar_ue_xnap_id; /* target NG-RAN node UE XnAP ID */
+  sctp_assoc_t tar_assoc_id;   /* SCTP association to the target gNB */
 } nr_ho_source_cu_t;
 
 /* acknowledgement of handover request. buf+len is the RRC Reconfiguration */
