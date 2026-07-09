@@ -75,6 +75,7 @@ typedef struct nr_ho_target_cu {
   /* Xn HO routing: set in rrc_gNB_process_XNAP_HANDOVER_REQUEST, used by
    * nr_rrc_xn_ho_acknowledge to build XNAP_HANDOVER_REQ_ACK. */
   uint32_t     src_ue_xnap_id; /* source XnAP UE ID from incoming HandoverRequest */
+  uint32_t     target_ue_id;   /* target XnAP UE ID, allocated when sending HandoverRequestAcknowledge */
   sctp_assoc_t source_assoc_id;       /* SCTP association back to the source gNB */
 } nr_ho_target_cu_t;
 

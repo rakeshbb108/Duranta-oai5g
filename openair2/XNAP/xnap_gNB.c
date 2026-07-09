@@ -53,7 +53,7 @@ static void xnap_gNB_generate_xn_setup_request(instance_t instance, xnap_gnb_ins
   xnap_gNB_itti_send_sctp_data(instance, peer->assoc_id, buffer, length, XNAP_NONUE_STREAM_ID);
 }
 
-/* Target gNB: target RRC sends ACK — allocate t_xnap_ue_id, store mapping, send HandoverRequestAck */
+/* Target gNB: target RRC sends ACK — store the t_xnap_ue_id mapping, send HandoverRequestAck */
 static void xnap_gNB_generate_handover_request_acknowledge(instance_t instance,
                                                             xnap_handover_req_ack_t *ack)
 {
@@ -72,14 +72,11 @@ static void xnap_gNB_generate_handover_request_acknowledge(instance_t instance,
     return;
   }
 
-  /* Allocate t_ng_node_ue_xnap_id and record the target rrc_ue_id mapping */
-  uint32_t t_xnap_ue_id = xnap_alloc_target_ue_id();
+  /* Record the target rrc_ue_id mapping under the RRC-allocated t_ng_node_ue_xnap_id */
   xnap_target_ue_data_t ue_data = {.rrc_ue_id = ack->rrc_ue_id, .source_assoc_id = ack->source_assoc_id};
-  bool ok = xnap_add_target_ue_data(t_xnap_ue_id, &ue_data);
+  bool ok = xnap_add_target_ue_data(ack->t_ng_node_ue_xnap_id, &ue_data);
   AssertFatal(ok, "[gNB %ld] Failed to store target UE data for t_xnap_ue_id %u\n",
-              instance, t_xnap_ue_id);
-
-  ack->t_ng_node_ue_xnap_id = t_xnap_ue_id;
+              instance, ack->t_ng_node_ue_xnap_id);
 
   XNAP_XnAP_PDU_t *pdu = encode_xnap_handover_request_acknowledge(ack);
   AssertFatal(pdu != NULL, "[gNB %ld] encode_xnap_handover_request_acknowledge() failed\n", instance);
@@ -92,7 +89,7 @@ static void xnap_gNB_generate_handover_request_acknowledge(instance_t instance,
 
   LOG_I(XNAP, "[gNB %ld] Sending HandoverRequestAck to source assoc_id %d "
         "s_xnap_ue_id %u t_xnap_ue_id %u rrc_ue_id %u (%u bytes)\n",
-        instance, ack->source_assoc_id, ack->s_ng_node_ue_xnap_id, t_xnap_ue_id,
+        instance, ack->source_assoc_id, ack->s_ng_node_ue_xnap_id, ack->t_ng_node_ue_xnap_id,
         ack->rrc_ue_id, length);
 
   xnap_gNB_itti_send_sctp_data(instance, peer->assoc_id, buffer, length, XNAP_NONUE_STREAM_ID);
