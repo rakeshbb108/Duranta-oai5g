@@ -6,10 +6,17 @@
 #define RRC_GNB_XNAP_H_
 
 #include "nr_rrc_defs.h"
+#include "openair2/COMMON/xnap_messages_types.h"
 
 void rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
                                         gNB_RRC_UE_t *UE,
                                         const nr_neighbour_cell_t *neighbour,
                                         byte_array_t hoPrepInfo);
+
+int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t *req);
+
+void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handover_req_ack_t *msg);
+
+void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byte_array_t ho_command);
 
 #endif /* RRC_GNB_XNAP_H_ */
