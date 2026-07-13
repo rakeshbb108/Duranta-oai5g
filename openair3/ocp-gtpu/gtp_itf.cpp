@@ -133,6 +133,10 @@ typedef struct {
   gtpCallbackSDAP callBackSDAP;
   /** PDU Session ID (1..255) */
   uint16_t pdusession_id;
+  /** DL forwarding tunnel (Xn HO): when non-zero, received DL packets are also
+   *  forwarded to target CU-UP at dl_fwd_addr:dl_fwd_teid in addition to normal delivery */
+  teid_t dl_fwd_teid;
+  struct sockaddr_storage dl_fwd_addr;
 } ueidData_t;
 
 typedef struct {
@@ -659,6 +663,45 @@ void GtpuUpdateTunnelOutgoingAddressAndTeid(instance_t instance,
 
   pthread_mutex_unlock(&globGtp.gtp_lock);
   return;
+}
+
+void GtpuSetDLForwardingTunnel(instance_t instance,
+                               ue_id_t ue_id,
+                               int bearer_id,
+                               in_addr_t fwdAddr,
+                               teid_t fwdTeid)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  getInstRetVoid(compatInst(instance));
+  getUeRetVoid(inst, ue_id);
+
+  auto ptr2 = ptrUe->second.bearers.find(bearer_id);
+  if (ptr2 == ptrUe->second.bearers.end()) {
+    LOG_E(GTPU, "[%ld] GtpuSetDLForwardingTunnel: bearer_id %d not found for ue %lu\n", instance, bearer_id, ue_id);
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return;
+  }
+
+  teid_t incoming_teid = ptr2->second.teid_incoming;
+  auto it = globGtp.te2ue_mapping.find(incoming_teid);
+  if (it == globGtp.te2ue_mapping.end()) {
+    LOG_E(GTPU, "[%ld] GtpuSetDLForwardingTunnel: incoming TEID 0x%x not in te2ue_mapping\n", instance, incoming_teid);
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return;
+  }
+
+  it->second.dl_fwd_teid = fwdTeid;
+  struct sockaddr_in *sa = (struct sockaddr_in *)&it->second.dl_fwd_addr;
+  sa->sin_family = AF_INET;
+  memcpy(&sa->sin_addr, &fwdAddr, sizeof(fwdAddr));
+  sa->sin_port = htons(2152); // standard GTP-U port
+  char ip4[INET_ADDRSTRLEN];
+  LOG_I(GTPU,
+        "[%ld] UE %lu bearer %d: DL forwarding tunnel set to %s TEID 0x%x\n",
+        instance, ue_id, bearer_id,
+        inet_ntop(AF_INET, &fwdAddr, ip4, sizeof(ip4)),
+        fwdTeid);
+  pthread_mutex_unlock(&globGtp.gtp_lock);
 }
 
 teid_t newGtpuCreateTunnel(instance_t instance,
@@ -1272,6 +1315,26 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
                   ntohl(msgHdr->teid));
       if (!uedata.callBack(&ctxt, srb_flag, rb_id, mui, confirm, sdu_buffer_size, sdu_buffer, mode, &sourceL2Id, &destinationL2Id))
         LOG_E(GTPU, "[%d] down layer refused incoming packet\n", h);
+    }
+
+    /* Xn HO DL data forwarding: re-encapsulate and send to target CU-UP (TS 38.424/38.425) */
+    if (uedata.dl_fwd_teid != 0) {
+      gtpv1u_bearer_t fwd_bearer = create_bearer(h, (const struct sockaddr_in *)&uedata.dl_fwd_addr, uedata.dl_fwd_teid, 0);
+      /* Re-attach the PDU Session Container so the target can route via SDAP/QFI
+       * instead of falling back to the (meaningless, for this tunnel) incoming_rb_id. */
+      gtpu_extension_header_t fwd_ext;
+      int fwd_ext_count = 0;
+      if (qfi != NO_QFI) {
+        fwd_ext = (gtpu_extension_header_t){
+          .type = GTPU_EXT_UL_PDU_SESSION_INFORMATION,
+          .ul_pdu_session_information = {.qfi = qfi},
+        };
+        fwd_ext_count = 1;
+      }
+      gtpv1uCreateAndSendMsg(&fwd_bearer, GTP_GPDU, (uint8_t *)sdu_buffer, sdu_buffer_size, false, false,
+                             fwd_ext_count ? &fwd_ext : NULL, fwd_ext_count);
+      LOG_D(GTPU, "[%d] UE %lu PDU session %d: forwarded %d bytes to DL fwd TEID 0x%x\n",
+            h, uedata.ue_id, uedata.pdusession_id, sdu_buffer_size, uedata.dl_fwd_teid);
     }
   }
 

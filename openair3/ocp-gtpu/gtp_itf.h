@@ -122,6 +122,16 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
                                               in_addr_t newOutgoingAddr,
                                               teid_t newOutgoingTeid);
 
+  /** @brief Set a DL forwarding tunnel on an existing GTP-U tunnel (Xn HO).
+   *  When set (fwdTeid != 0), all incoming DL packets on the tunnel are also
+   *  forwarded to the target CU-UP at fwdAddr:fwdTeid (TS 38.424 Xn-U).
+   *  bearer_id is the PDU session ID for N3 tunnels. */
+  void GtpuSetDLForwardingTunnel(instance_t instance,
+                                 ue_id_t ue_id,
+                                 int bearer_id,
+                                 in_addr_t fwdAddr,
+                                 teid_t fwdTeid);
+
   int newGtpuDeleteOneTunnel(instance_t instance, ue_id_t ue_id, int rb_id);
   int newGtpuDeleteAllTunnels(instance_t instance, ue_id_t ue_id);
 

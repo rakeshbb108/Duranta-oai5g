@@ -13,6 +13,7 @@
 #include "rrc_gNB_NGAP.h"
 #include "rrc_gNB_radio_bearers.h"
 #include "nr_rrc_proto.h"
+#include "E1AP/lib/e1ap_bearer_context_management.h"
 #include "openair2/COMMON/xnap_messages_types.h"
 #include "openair2/COMMON/ngap_messages_types.h"
 #include "openair3/NGAP/ngap_common.h"
@@ -383,7 +384,7 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
   UE->ho_context->source->tar_ue_xnap_id = msg->t_ng_node_ue_xnap_id;
   UE->ho_context->source->tar_assoc_id   = msg->source_assoc_id;
 
-  /* Store per-PDU-session DL forwarding tunnels for subsequent E1AP forwarding setup */
+  /* Store per-PDU-session DL forwarding tunnels received in HO ACK */
   for (int i = 0; i < msg->num_pdu_admitted; i++) {
     const xnap_pdusession_admitted_item_t *adm = &msg->pdusession_admitted_list[i];
     if (adm->dl_fwd_tnl.teid == 0)
@@ -396,6 +397,35 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
         break;
       }
     }
+  }
+
+  if (ue_associated_to_cuup(UE) && msg->num_pdu_admitted > 0) {
+    pdu_session_to_mod_t *fwd_sessions = calloc_or_fail(msg->num_pdu_admitted, sizeof(*fwd_sessions));
+    int num_fwd = 0;
+    for (int i = 0; i < msg->num_pdu_admitted; i++) {
+      const xnap_pdusession_admitted_item_t *adm = &msg->pdusession_admitted_list[i];
+      if (adm->dl_fwd_tnl.teid == 0)
+        continue;
+      fwd_sessions[num_fwd].sessionId = adm->pdusession_id;
+      fwd_sessions[num_fwd].dl_fwd_tnl = calloc_or_fail(1, sizeof(*fwd_sessions[num_fwd].dl_fwd_tnl));
+      fwd_sessions[num_fwd].dl_fwd_tnl->teId = (int32_t)adm->dl_fwd_tnl.teid;
+      memcpy(&fwd_sessions[num_fwd].dl_fwd_tnl->tlAddress,
+             adm->dl_fwd_tnl.addr.buffer, sizeof(in_addr_t));
+      num_fwd++;
+    }
+    if (num_fwd > 0) {
+      e1ap_bearer_mod_req_t e1_req = {
+        .gNB_cu_cp_ue_id = UE->rrc_ue_id,
+        .gNB_cu_up_ue_id = UE->rrc_ue_id,
+        .numPDUSessionsMod = num_fwd,
+        .pduSessionMod = fwd_sessions,
+      };
+      sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE); 
+      rrc->cucp_cuup.bearer_context_mod(assoc_id, &e1_req);
+    }
+    for (int i = 0; i < num_fwd; i++)
+      free(fwd_sessions[i].dl_fwd_tnl);
+    free(fwd_sessions);
   }
 
   byte_array_t buffer = doRRCReconfiguration_from_HandoverCommand(msg->target2source);

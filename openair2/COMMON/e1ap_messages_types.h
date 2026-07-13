@@ -468,6 +468,8 @@ typedef struct pdu_session_to_mod_s {
   // DRB To Remove List (0..maxnoofDRBs)
   int n_drb_to_remove;
   drb_to_remove_t drbs_to_remove[E1AP_MAX_NUM_DRBS];
+  // DL data forwarding tunnel for Xn HO (pDU-Session-Data-Forwarding-Information.dL-Data-Forwarding)
+  UP_TL_information_t *dl_fwd_tnl;
 } pdu_session_to_mod_t;
 
 /** PDU Session Resource To Remove List (3GPP TS 38.463 clause 9.3.3.12) */

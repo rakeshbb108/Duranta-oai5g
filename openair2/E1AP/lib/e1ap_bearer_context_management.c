@@ -1491,6 +1491,12 @@ static E1AP_PDU_Session_Resource_To_Modify_Item_t e1_encode_pdu_session_to_mod_i
       drb2Rem->dRB_ID = in->drbs_to_remove[r].id;
     }
   }
+  // DL Data Forwarding Information (O) — Xn HO: carry target CU-UP DL fwd tunnel to source CU-UP
+  if (in->dl_fwd_tnl) {
+    asn1cCalloc(out.pDU_Session_Data_Forwarding_Information, fwdInfo);
+    asn1cCalloc(fwdInfo->dL_Data_Forwarding, dlFwdTnl);
+    *dlFwdTnl = e1_encode_up_tnl_info(in->dl_fwd_tnl);
+  }
   return out;
 }
 
@@ -1729,6 +1735,10 @@ static bool e1_decode_pdu_session_to_mod_item(pdu_session_to_mod_t *out, const E
   out->sessionId = in->pDU_Session_ID;
   // DRB to modify list
   E1AP_DRB_To_Modify_List_NG_RAN_t *drb2ModList = in->dRB_To_Modify_List_NG_RAN;
+  if (!drb2ModList) {
+    out->numDRB2Modify = 0;
+    goto decode_optional;
+  }
   out->numDRB2Modify = drb2ModList->list.count;
   for (int j = 0; j < drb2ModList->list.count; j++) {
     DRB_nGRAN_to_mod_t *drb = out->DRBnGRanModList + j;
@@ -1771,6 +1781,7 @@ static bool e1_decode_pdu_session_to_mod_item(pdu_session_to_mod_t *out, const E
       }
     }
   }
+decode_optional:
   // DRB To Remove List (O)
   if (in->dRB_To_Remove_List_NG_RAN) {
     E1AP_DRB_To_Remove_List_NG_RAN_t *rm = in->dRB_To_Remove_List_NG_RAN;
@@ -1778,6 +1789,14 @@ static bool e1_decode_pdu_session_to_mod_item(pdu_session_to_mod_t *out, const E
     for (int r = 0; r < rm->list.count; r++) {
       E1AP_DRB_To_Remove_Item_NG_RAN_t *item = rm->list.array[r];
       out->drbs_to_remove[r].id = item->dRB_ID;
+    }
+  }
+  // DL Data Forwarding Information (O) — dL-Data-Forwarding carries target CU-UP DL fwd GTP-U tunnel
+  if (in->pDU_Session_Data_Forwarding_Information) {
+    const E1AP_Data_Forwarding_Information_t *fwdInfo = in->pDU_Session_Data_Forwarding_Information;
+    if (fwdInfo->dL_Data_Forwarding) {
+      out->dl_fwd_tnl = calloc_or_fail(1, sizeof(*out->dl_fwd_tnl));
+      CHECK_E1AP_DEC(e1_decode_up_tnl_info(out->dl_fwd_tnl, fwdInfo->dL_Data_Forwarding));
     }
   }
   return true;
@@ -1977,6 +1996,7 @@ static pdu_session_to_mod_t cp_pdu_session_to_mod_item(const pdu_session_to_mod_
     cp.drbs_to_remove[r] = msg->drbs_to_remove[r];
   _E1_CP_OPTIONAL_IE(&cp, msg, securityIndication);
   _E1_CP_OPTIONAL_IE(&cp, msg, UP_TL_information);
+  _E1_CP_OPTIONAL_IE(&cp, msg, dl_fwd_tnl);
   return cp;
 }
 
@@ -2089,6 +2109,11 @@ static bool eq_pdu_session_to_mod_item(const pdu_session_to_mod_t *a, const pdu_
     if (!eq_security_ind(a->securityIndication, b->securityIndication))
       return false;
   }
+  _EQ_CHECK_OPTIONAL_PTR(a, b, dl_fwd_tnl);
+  if (a->dl_fwd_tnl && b->dl_fwd_tnl) {
+    if (!eq_up_tl_info(a->dl_fwd_tnl, b->dl_fwd_tnl))
+      return false;
+  }
   return true;
 }
 
@@ -2163,6 +2188,7 @@ void free_pdu_session_to_mod_item(const pdu_session_to_mod_t *msg)
 {
   free(msg->securityIndication);
   free(msg->UP_TL_information);
+  free(msg->dl_fwd_tnl);
   for (int i = 0; i < msg->numDRB2Modify; i++)
     free_drb_to_mod_item(&msg->DRBnGRanModList[i]);
   for (int i = 0; i < msg->numDRB2Setup; i++)

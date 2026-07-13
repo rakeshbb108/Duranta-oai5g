@@ -496,6 +496,23 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
       const int drb_id = req_pdu_mod->drbs_to_remove[j].id;
       release_drb_resources(req->gNB_cu_up_ue_id, drb_id);
     }
+
+    /* DL data forwarding tunnel (Xn HO): redirect incoming DL packets on N3 to target CU-UP */
+    if (req_pdu_mod->dl_fwd_tnl) {
+      instance_t n3inst = get_n3_gtp_instance();
+      if (n3inst >= 0) {
+        GtpuSetDLForwardingTunnel(n3inst,
+                                  req->gNB_cu_up_ue_id,
+                                  (int)req_pdu_mod->sessionId,
+                                  req_pdu_mod->dl_fwd_tnl->tlAddress,
+                                  (teid_t)req_pdu_mod->dl_fwd_tnl->teId);
+        LOG_I(E1AP,
+              "UE %u: PDU session %ld DL forwarding tunnel TEID 0x%x\n",
+              req->gNB_cu_up_ue_id,
+              req_pdu_mod->sessionId,
+              req_pdu_mod->dl_fwd_tnl->teId);
+      }
+    }
   }
 
   /* PDU Session Resource To Remove List (see 9.3.3.12 of TS 38.463) */
