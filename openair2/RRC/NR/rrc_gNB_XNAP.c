@@ -343,6 +343,10 @@ void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byt
           admitted[idx].qos_list[j].qfi = qos->qos.qfi;
         }
       }
+      /* DL forwarding tunnel: use the target CU-UP N3 DL endpoint allocated during
+       * E1AP Bearer Context Setup — source gNB will forward DL data here until
+       * the UPF path switches after HandoverNotify. */
+      admitted[idx].dl_fwd_tnl = p->param.n3_outgoing;
       idx++;
     }
   }
@@ -378,6 +382,21 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
 
   UE->ho_context->source->tar_ue_xnap_id = msg->t_ng_node_ue_xnap_id;
   UE->ho_context->source->tar_assoc_id   = msg->source_assoc_id;
+
+  /* Store per-PDU-session DL forwarding tunnels for subsequent E1AP forwarding setup */
+  for (int i = 0; i < msg->num_pdu_admitted; i++) {
+    const xnap_pdusession_admitted_item_t *adm = &msg->pdusession_admitted_list[i];
+    if (adm->dl_fwd_tnl.teid == 0)
+      continue;
+    FOR_EACH_SEQ_ARR (rrc_pdu_session_param_t *, p, &UE->pduSessions) {
+      if (p->param.pdusession_id == adm->pdusession_id) {
+        p->dl_fwd_tnl = adm->dl_fwd_tnl;
+        LOG_I(NR_RRC, "UE %d: PDU session %d DL fwd tunnel teid 0x%x\n",
+              UE->rrc_ue_id, adm->pdusession_id, adm->dl_fwd_tnl.teid);
+        break;
+      }
+    }
+  }
 
   byte_array_t buffer = doRRCReconfiguration_from_HandoverCommand(msg->target2source);
   if (!buffer.buf || buffer.len == 0) {

@@ -324,6 +324,9 @@ typedef struct {
   // QoS Flows Admitted List
   uint8_t num_qos;
   xnap_qos_admitted_item_t *qos_list;
+  // DL forwarding GTP-U tunnel (target CU-UP endpoint for source→target forwarding)
+  // zero-initialised when not available (teid == 0 means absent)
+  gtpu_tunnel_t dl_fwd_tnl;
 } xnap_pdusession_admitted_item_t;
 
 /* 3GPP TS 38.423 9.1.1.2 – Handover Request Acknowledge */

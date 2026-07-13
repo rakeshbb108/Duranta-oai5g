@@ -697,9 +697,23 @@ XNAP_XnAP_PDU_t *encode_xnap_handover_request_acknowledge(const xnap_handover_re
     for (int j = 0; j < pdu->num_qos; j++) {
       const xnap_qos_admitted_item_t *qos = &pdu->qos_list[j];
       asn1cSequenceAdd(pduItem->pduSessionResourceAdmittedInfo.qosFlowsAdmitted_List.list, XNAP_QoSFlowsAdmitted_Item_t, qosItem);
-
-      /* QoS Flow Identifier */
       qosItem->qfi = qos->qfi;
+    }
+
+    /* DL forwarding tunnel (optional): DataForwardingInfoFromTargetNGRANnode */
+    if (pdu->dl_fwd_tnl.teid != 0) {
+      asn1cCalloc(pduItem->pduSessionResourceAdmittedInfo.dataForwardingInfoFromTarget, fwdInfo);
+
+      /* QoS flows accepted for DL forwarding: same set as admitted */
+      for (int j = 0; j < pdu->num_qos; j++) {
+        asn1cSequenceAdd(fwdInfo->qosFlowsAcceptedForDataForwarding_List.list,
+                         XNAP_QoSFLowsAcceptedToBeForwarded_Item_t, fwdQos);
+        fwdQos->qosFlowIdentifier = pdu->qos_list[j].qfi;
+      }
+
+      /* pduSessionLevelDLDataForwardingInfo: GTP-U tunnel on target CU-UP */
+      asn1cCalloc(fwdInfo->pduSessionLevelDLDataForwardingInfo, dlFwdTnl);
+      *dlFwdTnl = xnap_encode_ul_ngu_tnl_info(&pdu->dl_fwd_tnl);
     }
   }
 
@@ -792,6 +806,12 @@ bool decode_xnap_handover_request_acknowledge(xnap_handover_req_ack_t *out, cons
                 dst->qos_list[k].qfi = qosItem->qfi;
               }
             }
+
+            /* DL forwarding tunnel (optional) */
+            const XNAP_DataForwardingInfoFromTargetNGRANnode_t *fwdInfo =
+                pduItem->pduSessionResourceAdmittedInfo.dataForwardingInfoFromTarget;
+            if (fwdInfo && fwdInfo->pduSessionLevelDLDataForwardingInfo)
+              decode_xnap_ul_ngu_tnl_info(fwdInfo->pduSessionLevelDLDataForwardingInfo, &dst->dl_fwd_tnl);
           }
         }
       } break;
@@ -832,6 +852,8 @@ static bool eq_xnap_pdusession_admitted_item(const xnap_pdusession_admitted_item
     if (!eq_xnap_qos_admitted_item(&a->qos_list[i], &b->qos_list[i]))
       return false;
   }
+
+  _EQ_CHECK_UINT32(a->dl_fwd_tnl.teid, b->dl_fwd_tnl.teid);
 
   return true;
 }
