@@ -34,6 +34,9 @@
 
 #include "XNAP_PDUSessionResourcesAdmitted-Item.h"
 #include "XNAP_QoSFlowsAdmitted-Item.h"
+#include "XNAP_DataForwardingInfoFromTargetNGRANnode.h"
+#include "XNAP_QoSFLowsAcceptedToBeForwarded-List.h"
+#include "XNAP_QoSFLowsAcceptedToBeForwarded-Item.h"
 
 #include "XNAP_DRBsSubjectToStatusTransfer-Item.h"
 #include "XNAP_DRBBStatusTransfer18bitsSN.h"
