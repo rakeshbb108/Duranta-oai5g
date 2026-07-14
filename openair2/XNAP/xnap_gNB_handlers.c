@@ -289,6 +289,35 @@ static int xnap_gNB_handle_handover_request(instance_t instance,
 }
 
 /* ------------------------------------------------------------------ */
+/* SN Status Transfer handler                                           */
+/* ------------------------------------------------------------------ */
+
+/* Target gNB: receives SN Status Transfer from source — decode and forward to RRC */
+static int xnap_gNB_handle_sn_status_transfer(instance_t instance,
+                                               sctp_assoc_t assoc_id,
+                                               uint32_t stream,
+                                               xnap_gnb_inst_t *inst,
+                                               xnap_peer_t *peer,
+                                               XNAP_XnAP_PDU_t *pdu)
+{
+  (void)stream;
+  (void)peer;
+  LOG_I(XNAP, "[gNB %ld] Received SN Status Transfer from assoc_id %d\n", instance, assoc_id);
+
+  xnap_sn_status_transfer_t msg = {0};
+  if (!decode_xnap_sn_status_transfer(&msg, pdu)) {
+    LOG_E(XNAP, "[gNB %ld] Failed to decode SN Status Transfer from assoc_id %d\n",
+          instance, assoc_id);
+    return -1;
+  }
+
+  MessageDef *itti_msg = itti_alloc_new_message(TASK_XNAP, inst->instance, XNAP_SN_STATUS_TRANSFER);
+  XNAP_SN_STATUS_TRANSFER(itti_msg) = msg;
+  itti_send_msg_to_task(TASK_RRC_GNB, inst->instance, itti_msg);
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Callback table                                                       */
 /*                                                                      */
 /* Indexed by [procedureCode][direction-1] where direction is:          */
@@ -300,7 +329,7 @@ static int xnap_gNB_handle_handover_request(instance_t instance,
 
 static const xnap_message_decoded_callback xnap_messages_callback[XNAP_NUM_PROC_CODES][3] = {
   /*  0 handoverPreparation                             */ {xnap_gNB_handle_handover_request, xnap_gNB_handle_handover_request_acknowledge, 0},
-  /*  1 sNStatusTransfer                                */ {0, 0, 0},
+  /*  1 sNStatusTransfer                                */ {xnap_gNB_handle_sn_status_transfer, 0, 0},
   /*  2 handoverCancel                                  */ {0, 0, 0},
   /*  3 retrieveUEContext                               */ {0, 0, 0},
   /*  4 rANPaging                                       */ {0, 0, 0},

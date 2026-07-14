@@ -16,6 +16,7 @@
 #define XNAP_PEER_SHUTDOWN_IND(mSGpTR)    (mSGpTR)->ittiMsg.xnap_peer_shutdown_ind
 #define XNAP_HANDOVER_REQ(mSGpTR)         (mSGpTR)->ittiMsg.xnap_handover_req
 #define XNAP_HANDOVER_REQ_ACK(mSGpTR)     (mSGpTR)->ittiMsg.xnap_handover_req_ack
+#define XNAP_SN_STATUS_TRANSFER(mSGpTR)   (mSGpTR)->ittiMsg.xnap_sn_status_transfer
 
 typedef struct {
   // PLMN Identity (M)

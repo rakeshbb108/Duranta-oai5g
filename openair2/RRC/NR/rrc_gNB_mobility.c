@@ -793,6 +793,7 @@ void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
   }
   ue->ho_context->source->cell = source_cell;
   ue->ho_context->source->ho_cancel = nr_rrc_xn_ho_cancel;
+  ue->ho_context->source->ho_status_transfer = rrc_gNB_send_XNAP_SN_STATUS_TRANSFER;
 
   rrc_gNB_send_XNAP_HANDOVER_REQUEST(rrc, ue, neighbour, hoPrepInfo);
   free_byte_array(hoPrepInfo);

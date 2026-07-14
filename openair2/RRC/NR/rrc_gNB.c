@@ -2516,7 +2516,7 @@ static void store_du_f1u_tunnel(const f1ap_drb_setup_t *drbs, int n, gNB_RRC_UE_
 
 static DRB_nGRAN_to_mod_t get_e1_drb_mod_pdcp_status(const drb_t *drb,
                                                      bearer_context_pdcp_config_t *pdcp_config,
-                                                     const ngap_drb_status_t *drb_status)
+                                                     const rrc_drb_pdcp_status_t *drb_status)
 {
   DevAssert(drb_status);
   DevAssert(pdcp_config);
@@ -2524,14 +2524,13 @@ static DRB_nGRAN_to_mod_t get_e1_drb_mod_pdcp_status(const drb_t *drb,
   DRB_nGRAN_to_mod_t drb_to_mod = {0};
   drb_to_mod.id = drb->drb_id;
   drb_to_mod.pdcp_sn_status_requested = false;
-  // PDCP SN Status Information
   drb_to_mod.pdcp_config = calloc_or_fail(1, sizeof(*drb_to_mod.pdcp_config));
   *drb_to_mod.pdcp_config = *pdcp_config;
   drb_to_mod.pdcp_status = calloc_or_fail(1, sizeof(*drb_to_mod.pdcp_status));
   drb_to_mod.pdcp_status->dl_count.hfn = drb_status->dl_count.hfn;
-  drb_to_mod.pdcp_status->dl_count.sn = drb_status->dl_count.pdcp_sn;
+  drb_to_mod.pdcp_status->dl_count.sn  = drb_status->dl_count.sn;
   drb_to_mod.pdcp_status->ul_count.hfn = drb_status->ul_count.hfn;
-  drb_to_mod.pdcp_status->ul_count.sn = drb_status->ul_count.pdcp_sn;
+  drb_to_mod.pdcp_status->ul_count.sn  = drb_status->ul_count.sn;
   return drb_to_mod;
 }
 
@@ -2607,8 +2606,8 @@ static void e1_request_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
   free_e1ap_context_mod_request(&req);
 }
 
-/** @brief Notify CU-UP with PDCP status during handover */
-void e1_notify_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const ngap_drb_status_t *drb_status)
+/** @brief Notify CU-UP with PDCP status during handover (N2 or Xn) */
+void e1_notify_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const rrc_drb_pdcp_status_t *drb_status)
 {
   if (!is_cuup_associated(rrc) || !drb_status)
     return;
@@ -3911,6 +3910,11 @@ void *rrc_gnb_task(void *args_p)
 
       case XNAP_HANDOVER_REQ_ACK:
         rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(RC.nrrrc[instance], &XNAP_HANDOVER_REQ_ACK(msg_p));
+        break;
+
+      case XNAP_SN_STATUS_TRANSFER:
+        rrc_gNB_process_XNAP_SN_STATUS_TRANSFER(RC.nrrrc[instance], instance,
+                                                 &XNAP_SN_STATUS_TRANSFER(msg_p));
         break;
 
       default:
