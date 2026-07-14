@@ -254,6 +254,8 @@ typedef struct {
   // QoS Flows To Be Setup List (M)
   uint8_t num_qos;
   xnap_qos_flow_tobe_setup_item_t *qos_list;
+  // Source proposed DL forwarding for this session (from dataforwardinginfofromSource IE)
+  bool dl_forwarding_proposed;
 } xnap_pdusession_resources_tobe_setup_item_t;
 
 typedef struct {

@@ -91,6 +91,8 @@ typedef struct pdusession_s {
   nssai_t nssai;
   // PDU Session specific SDAP configuration
   nr_sdap_configuration_t sdap_config;
+  // Source proposed DL forwarding for this session (from XnAP HandoverRequest)
+  bool dl_forwarding_proposed;
 } pdusession_t;
 
 typedef struct pdu_session_param_s {
@@ -100,6 +102,8 @@ typedef struct pdu_session_param_s {
   ngap_cause_t cause;
   // DL forwarding GTP-U tunnel received in Xn HO ACK (source side only)
   gtpu_tunnel_t dl_fwd_tnl;
+  // DL forwarding GTP-U tunnel allocated by target CU-UP (target side only)
+  gtpu_tunnel_t dl_fwd_cuup_tnl;
 } rrc_pdu_session_param_t;
 
 typedef struct drb_s {

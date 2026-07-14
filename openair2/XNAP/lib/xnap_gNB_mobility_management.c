@@ -311,6 +311,16 @@ XNAP_XnAP_PDU_t *encode_xnap_handover_request(const xnap_handover_req_t *req)
       arp->pre_emption_capability = qos->qos_params.arp.pre_emp_capability;
       arp->pre_emption_vulnerability = qos->qos_params.arp.pre_emp_vulnerability;
     }
+
+    if (pdu->dl_forwarding_proposed) {
+      asn1cCalloc(pduItem->dataforwardinginfofromSource, fwdInfo);
+      for (int j = 0; j < pdu->num_qos; j++) {
+        asn1cSequenceAdd(fwdInfo->qosFlowsToBeForwarded.list, XNAP_QoSFLowsToBeForwarded_Item_t, fwdItem);
+        fwdItem->qosFlowIdentifier = pdu->qos_list[j].qfi;
+        fwdItem->dl_dataforwarding = XNAP_DLForwarding_dl_forwarding_proposed;
+        fwdItem->ul_dataforwarding = XNAP_ULForwarding_ul_forwarding_proposed;
+      }
+    }
   }
 
   /* UE History Information (M) */
@@ -430,6 +440,9 @@ bool decode_xnap_handover_request(xnap_handover_req_t *out, const XNAP_XnAP_PDU_
 
           if (!decode_xnap_qos_flows_to_be_setup_list(&pdu->qosFlowsToBeSetup_List, dst))
             return false;
+
+          if (pdu->dataforwardinginfofromSource)
+            dst->dl_forwarding_proposed = true;
         }
       } break;
 

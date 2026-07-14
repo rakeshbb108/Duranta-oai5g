@@ -3297,6 +3297,8 @@ static void rrc_gNB_process_e1_bearer_context_setup_resp(e1ap_bearer_setup_resp_
       continue;
     }
     rrc_pdu->param.n3_outgoing = f1u_gtp_update(e1_pdu->tl_info.teId, e1_pdu->tl_info.tlAddress);
+    if (e1_pdu->dl_fwd_tnl)
+      rrc_pdu->dl_fwd_cuup_tnl = f1u_gtp_update(e1_pdu->dl_fwd_tnl->teId, e1_pdu->dl_fwd_tnl->tlAddress);
 
     // save the tunnel address for the DRBs
     for (int j = 0; j < e1_pdu->numDRBSetup; j++) {

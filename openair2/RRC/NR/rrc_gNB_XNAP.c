@@ -105,9 +105,10 @@ void rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
     const pdusession_t *ps = &p->param;
     xnap_pdusession_resources_tobe_setup_item_t *item = &pdu_list[idx++];
 
-    item->pdusession_id    = ps->pdusession_id;
-    item->pdu_session_type = ps->pdu_session_type;
-    item->n3_incoming      = ps->n3_incoming;
+    item->pdusession_id         = ps->pdusession_id;
+    item->pdu_session_type      = ps->pdu_session_type;
+    item->n3_incoming           = ps->n3_incoming;
+    item->dl_forwarding_proposed = true;
 
     nssai_t *nssai_copy = malloc(sizeof(*nssai_copy));
     AssertFatal(nssai_copy != NULL, "malloc failed for nssai\n");
@@ -286,9 +287,10 @@ int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t
     xnap_pdusession_resources_tobe_setup_item_t *xpdu = &req->ue_context.pdusession_resources_tobe_setup_list[i];
     pdusession_t *pdu = &sessions[i];
 
-    pdu->pdusession_id    = xpdu->pdusession_id;
-    pdu->pdu_session_type = xpdu->pdu_session_type;
-    pdu->n3_incoming      = xpdu->n3_incoming;
+    pdu->pdusession_id         = xpdu->pdusession_id;
+    pdu->pdu_session_type      = xpdu->pdu_session_type;
+    pdu->n3_incoming           = xpdu->n3_incoming;
+    pdu->dl_forwarding_proposed = xpdu->dl_forwarding_proposed;
     if (xpdu->nssai)
       pdu->nssai = *xpdu->nssai;
 
@@ -347,7 +349,7 @@ void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byt
       /* DL forwarding tunnel: use the target CU-UP N3 DL endpoint allocated during
        * E1AP Bearer Context Setup — source gNB will forward DL data here until
        * the UPF path switches after HandoverNotify. */
-      admitted[idx].dl_fwd_tnl = p->param.n3_outgoing;
+      admitted[idx].dl_fwd_tnl = p->dl_fwd_cuup_tnl;
       idx++;
     }
   }
