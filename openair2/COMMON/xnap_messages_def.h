@@ -10,5 +10,8 @@ MESSAGE_DEF(XNAP_SETUP_IND,          MESSAGE_PRIORITY_MED, xnap_setup_ind_t,    
 MESSAGE_DEF(XNAP_PEER_SHUTDOWN_IND,  MESSAGE_PRIORITY_MED, xnap_peer_shutdown_ind_t,  xnap_peer_shutdown_ind)
 
 /* Handover Preparation: RRC -> XNAP (source sends) / XNAP -> RRC (target receives) */
-MESSAGE_DEF(XNAP_HANDOVER_REQ,       MESSAGE_PRIORITY_MED, xnap_handover_req_t,       xnap_handover_req)
-MESSAGE_DEF(XNAP_HANDOVER_REQ_ACK,   MESSAGE_PRIORITY_MED, xnap_handover_req_ack_t,   xnap_handover_req_ack)
+MESSAGE_DEF(XNAP_HANDOVER_REQ,         MESSAGE_PRIORITY_MED, xnap_handover_req_t,         xnap_handover_req)
+MESSAGE_DEF(XNAP_HANDOVER_REQ_ACK,     MESSAGE_PRIORITY_MED, xnap_handover_req_ack_t,     xnap_handover_req_ack)
+
+/* SN Status Transfer: RRC -> XNAP (source sends) / XNAP -> RRC (target receives) */
+MESSAGE_DEF(XNAP_SN_STATUS_TRANSFER,   MESSAGE_PRIORITY_MED, xnap_sn_status_transfer_t,   xnap_sn_status_transfer)
