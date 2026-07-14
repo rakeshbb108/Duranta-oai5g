@@ -19,4 +19,14 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
 
 void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byte_array_t ho_command);
 
+int rrc_gNB_send_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
+                                          gNB_RRC_UE_t *UE,
+                                          const int n_to_mod,
+                                          const int *drb_ids,
+                                          const e1_pdcp_status_info_t *pdcp_status);
+
+int rrc_gNB_process_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
+                                             instance_t instance,
+                                             xnap_sn_status_transfer_t *msg);
+
 #endif /* RRC_GNB_XNAP_H_ */

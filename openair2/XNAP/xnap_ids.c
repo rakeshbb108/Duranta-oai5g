@@ -116,6 +116,15 @@ bool xnap_add_target_ue_data(uint32_t t_xnap_ue_id, const xnap_target_ue_data_t 
   return rc == HASH_TABLE_OK;
 }
 
+bool xnap_exists_target_ue_data(uint32_t t_xnap_ue_id)
+{
+  pthread_mutex_lock(&xnap_target_ue_mutex);
+  DevAssert(xnap_target_ue_mapping != NULL);
+  hashtable_rc_t rc = hashtable_is_key_exists(xnap_target_ue_mapping, t_xnap_ue_id);
+  pthread_mutex_unlock(&xnap_target_ue_mutex);
+  return rc == HASH_TABLE_OK;
+}
+
 xnap_target_ue_data_t xnap_get_target_ue_data(uint32_t t_xnap_ue_id)
 {
   pthread_mutex_lock(&xnap_target_ue_mutex);
