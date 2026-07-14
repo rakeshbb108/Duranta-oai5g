@@ -201,6 +201,10 @@ static teid_t gtpv1uNewTeid(void)
 instance_t legacyInstanceMapping = 0;
 #define compatInst(a) ((a) == 0 || (a) == INSTANCE_DEFAULT ? legacyInstanceMapping : a)
 
+// set by cuup_init_xnu() once the dedicated Xn-U GTP-U instance is created;
+// lets Gtpv1uHandleEndMarker() recognize an End Marker arriving on Xn-U
+instance_t *XnUGTPUInst = NULL;
+
 #define getInstRetVoid(insT)                                 \
   auto instChk = globGtp.instances.find(compatInst(insT));   \
   if (instChk == globGtp.instances.end()) {                  \
@@ -885,7 +889,8 @@ int gtpv1u_create_ngu_tunnel(const instance_t instance,
   teid_t teid = newGtpuCreateTunnel(instance,
                                     create_tunnel_req->ue_id,
                                     create_tunnel_req->incoming_rb_id,
-                                    create_tunnel_req->pdusession_id,
+                                    create_tunnel_req->outgoing_bearer_id ? create_tunnel_req->outgoing_bearer_id
+                                                                          : create_tunnel_req->pdusession_id,
                                     create_tunnel_req->outgoing_teid,
                                     create_tunnel_req->dst_addr,
                                     callBack,

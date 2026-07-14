@@ -150,6 +150,11 @@ typedef struct gtpv1u_gnb_create_tunnel_req_s {
   uint16_t incoming_rb_id;
   // Destination TL address
   transport_layer_addr_t dst_addr;
+  // ue2te_mapping key to register this tunnel under; 0 means "use pdusession_id"
+  // (existing N3-U/F1-U behavior). Set this when pdusession_id must stay the
+  // true PDU session id (e.g. for reporting) but the tunnel needs a bookkeeping
+  // key distinct from another tunnel already registered under that session id.
+  int outgoing_bearer_id;
 } gtpv1u_gnb_create_tunnel_req_t;
 
 /** @brief GTP-U Create Tunnel Response */

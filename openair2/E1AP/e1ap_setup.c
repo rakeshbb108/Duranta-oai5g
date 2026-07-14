@@ -117,6 +117,31 @@ MessageDef *RCconfig_NR_CU_E1(const E1_t *entity)
     get_NGU_S1U_addr(&e1ap_nc->localAddressN3, &e1ap_nc->localPortN3);
     e1ap_nc->remotePortN3 = e1ap_nc->localPortN3 ;
 
+    // Xn-U config lives in the XNAP block, but its shape depends on deployment mode:
+    // monolithic/CU-DU (entity==NULL) and standalone CU-CP (entity==CPtype) share one
+    // conf with the full XNAP section (Xn-C port, candidates, ENABLE_XN_INTERFACE);
+    // CU-CP has no Xn-U keys at all (that's the CU-UP's job). Standalone CU-UP
+    // (entity==UPtype) has its own conf with only the Xn-U address/port under XNAP --
+    // no ENABLE_XN_INTERFACE there, so presence of the address key is the enable signal.
+    if (entity == NULL || *entity == UPtype) {
+      char xn_path[MAX_OPTNAME_SIZE * 2 + 8];
+      sprintf(xn_path, "%s.[%i].%s", GNB_CONFIG_STRING_GNB_LIST, 0, GNB_CONFIG_STRING_XNAP);
+      paramdef_t XnParams[] = XnPARAMS_DESC;
+      config_get(config_get_if(), XnParams, sizeofArray(XnParams), xn_path);
+
+      bool bring_up_xnu = entity != NULL ? config_isparamset(XnParams, GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNU_IDX)
+                                          : *(XnParams[GNB_CONFIG_XNAP_ENABLE_IDX].iptr);
+      if (bring_up_xnu) {
+        AssertFatal(XnParams[GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNU_IDX].strptr != NULL
+                        && *(XnParams[GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNU_IDX].strptr) != NULL,
+                    "Xn-U enabled but %s is not defined in configuration file\n",
+                    GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNU);
+        e1ap_nc->localAddressXnU = strdup(*(XnParams[GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNU_IDX].strptr));
+        e1ap_nc->localPortXnU = (uint16_t)*(XnParams[GNB_CONFIG_STRING_GNB_PORT_FOR_XNU_IDX].uptr);
+        e1ap_nc->remotePortXnU = e1ap_nc->localPortXnU;
+      }
+    }
+
     AssertFatal(config_isparamset(gnbParms, GNB_GNB_ID_IDX), "%s is not defined in configuration file\n", GNB_CONFIG_STRING_GNB_ID);
     uint32_t gnb_id = *gnbParms[GNB_GNB_ID_IDX].uptr;
     E1AP_REGISTER_REQ(msgConfig).gnb_id = gnb_id;

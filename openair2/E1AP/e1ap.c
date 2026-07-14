@@ -536,6 +536,7 @@ static void e1_task_handle_sctp_association_resp(E1_t type,
     if (getCxtE1(instance)->gtpInstF1U < 0)
       LOG_E(E1AP, "Failed to create CUUP F1-U UDP listener\n");
     cuup_init_n3(instance);
+    cuup_init_xnu(instance);
     e1apCUUP_send_SETUP_REQUEST(inst->cuup.assoc_id, &inst->cuup.setupReq);
   }
 }
@@ -558,6 +559,24 @@ void cuup_init_n3(instance_t instance)
     LOG_E(E1AP, "Failed to create CUUP N3 UDP listener\n");
   extern instance_t *N3GTPUInst;
   N3GTPUInst = &getCxtE1(instance)->gtpInstN3;
+}
+
+void cuup_init_xnu(instance_t instance)
+{
+  e1ap_net_config_t *nc = &getCxtE1(instance)->net_config;
+  if (nc->localAddressXnU == NULL) // Xn-U not configured/enabled: e1ap_setup.c leaves this unset
+    return;
+  if (getCxtE1(instance)->gtpInstXnU < 0) {
+    openAddr_t tmp = {0};
+    strcpy(tmp.originHost, nc->localAddressXnU);
+    sprintf(tmp.originService, "%d", nc->localPortXnU);
+    sprintf(tmp.destinationService, "%d", nc->remotePortXnU);
+    LOG_I(GTPU, "Configuring Xn-U GTPu address : %s, port : %s\n", tmp.originHost, tmp.originService);
+    getCxtE1(instance)->gtpInstXnU = gtpv1Init(tmp);
+  }
+  AssertFatal(getCxtE1(instance)->gtpInstXnU >= 0, "Failed to create mandatory CUUP Xn-U UDP listener\n");
+  extern instance_t *XnUGTPUInst;
+  XnUGTPUInst = &getCxtE1(instance)->gtpInstXnU;
 }
 
 void cucp_task_send_sctp_init_req(instance_t instance, char *my_addr)

@@ -264,6 +264,7 @@ static int create_gNB_tasks(ngran_node_t node_type, configmodule_interface_t *cf
       instance_t inst = 0;
       createE1inst(UPtype, inst, E1AP_REGISTER_REQ(msg).gnb_id, &E1AP_REGISTER_REQ(msg).net_config, NULL);
       cuup_init_n3(inst);
+      cuup_init_xnu(inst);
       RC.nrrrc[gnb_id_start]->e1_inst = inst; // stupid instance !!!*/
 
       /* send E1 Setup Request to RRC */

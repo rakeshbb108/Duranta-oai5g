@@ -115,6 +115,13 @@ static instance_t get_n3_gtp_instance(void)
   return inst->gtpInstN3;
 }
 
+static instance_t get_xnu_gtp_instance(void)
+{
+  const e1ap_upcp_inst_t *inst = getCxtE1(0);
+  AssertFatal(inst, "need to have E1 instance\n");
+  return inst->gtpInstXnU;
+}
+
 /** @brief Fill and send request to create GTP-U tunnel (N3). One tunnel per PDU session. */
 static UP_TL_information_t n3_gtpu_create(const gtpv1u_gnb_create_tunnel_req_t *req)
 {
@@ -133,6 +140,38 @@ static UP_TL_information_t n3_gtpu_create(const gtpv1u_gnb_create_tunnel_req_t *
   memcpy(&out.tlAddress, resp.gnb_addr.buffer, resp.gnb_addr.length);
   out.teId = resp.gnb_NGu_teid;
 
+  return out;
+}
+
+/* Allocate a GTP-U tunnel on the dedicated Xn-U interface for DL forwarding.
+ * Xn-U has its own instance and key space, so pdusession_id is used as-is. */
+static UP_TL_information_t xn_gtpu_create(uint32_t ue_id, int pdusession_id)
+{
+  instance_t xnuinst = get_xnu_gtp_instance();
+  AssertFatal(xnuinst >= 0, "Xn-U GTP-U instance not available (XNAP not enabled?)\n");
+  UP_TL_information_t out = {0};
+
+  gtpv1u_gnb_create_tunnel_req_t req = {
+    .ue_id              = ue_id,
+    .outgoing_teid      = 0,
+    .pdusession_id      = pdusession_id,
+    .incoming_rb_id     = pdusession_id,
+    .outgoing_bearer_id = pdusession_id,
+    .dst_addr.length    = 32,
+  };
+  memset(req.dst_addr.buffer, 0, sizeof(req.dst_addr.buffer));
+
+  LOG_I(GTPU, "Xn-U fwd tunnel: PDUSession=%d incoming_rb_id=%d\n", pdusession_id, req.incoming_rb_id);
+
+  gtpv1u_gnb_create_tunnel_resp_t resp = {0};
+  int ret = gtpv1u_create_ngu_tunnel(xnuinst, &req, &resp, nr_pdcp_data_req_drb, sdap_data_req);
+  AssertFatal(ret >= 0, "Unable to create GTP-U tunnel for Xn-U forwarding, PDU session %d\n", pdusession_id);
+  AssertFatal(resp.gnb_addr.length == sizeof(in_addr_t),
+              "GTP tunnel response address length %d does not match IPv4 size %zu\n",
+              resp.gnb_addr.length,
+              sizeof(in_addr_t));
+  memcpy(&out.tlAddress, resp.gnb_addr.buffer, resp.gnb_addr.length);
+  out.teId = resp.gnb_NGu_teid;
   return out;
 }
 
@@ -281,6 +320,16 @@ void e1_bearer_context_setup(const e1ap_bearer_setup_req_t *req)
                                                     .dst_addr.length = 32};
     memcpy(&n3_tunnel_req.dst_addr.buffer, &req_pdu->UP_TL_information.tlAddress, sizeof(uint8_t) * 4); // only IPv4 now
     resp_pdu->tl_info = n3_gtpu_create(&n3_tunnel_req);
+
+    // DL forwarding tunnel: allocate a separate GTP-U TEID for DL data forwarding
+    // during Xn handover — the TEID space is disjoint from the N3 NG-U tunnel above.
+    if (req_pdu->dl_fwd_tnl_req) {
+      UP_TL_information_t fwd_tl_info = xn_gtpu_create(cu_up_ue_id, req_pdu->sessionId);
+      resp_pdu->dl_fwd_tnl = calloc_or_fail(1, sizeof(*resp_pdu->dl_fwd_tnl));
+      *resp_pdu->dl_fwd_tnl = fwd_tl_info;
+      LOG_I(E1AP, "UE %d: DL fwd tunnel for PDU session %ld: TEID 0x%x\n",
+            cu_up_ue_id, req_pdu->sessionId, fwd_tl_info.teId);
+    }
 
     // We assume all DRBs to setup have been setup successfully, so we always
     // send successful outcome in response and no failed DRBs
