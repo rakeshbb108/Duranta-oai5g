@@ -135,12 +135,19 @@ void nr_rrc_apply_target_context(gNB_RRC_UE_t *UE)
  * \param target_du the DU towards which to handover. Note: currently, the CU
  * is limited to one cell per DU, so DU and cell are equivalent here.
  * \param ho_ctxt contextual data for the type of handover (F1, N2, Xn) */
+static void nr_rrc_ho_finalize_cb(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
+{
+  (void)rrc;
+  nr_rrc_finalize_ho(UE);
+}
+
 static void nr_initiate_handover(const gNB_RRC_INST *rrc,
                                  gNB_RRC_UE_t *ue,
                                  const nr_rrc_cell_container_t *source_cell,
                                  byte_array_t *ho_prep_info,
                                  ho_req_ack_t ack,
                                  ho_success_t success,
+                                 ho_reconfig_ack_t reconfig_ack,
                                  ho_cancel_t cancel,
                                  ho_failure_t failure)
 {
@@ -167,6 +174,7 @@ static void nr_initiate_handover(const gNB_RRC_INST *rrc,
   // response
   ho_ctx->target->ho_req_ack = ack;
   ho_ctx->target->ho_success = success;
+  ho_ctx->target->ho_reconfig_ack = reconfig_ack;
   ho_ctx->target->ho_failure = failure;
 
   const f1_ue_data_t ue_data = cu_get_f1_ue_data(ue->rrc_ue_id);
@@ -353,7 +361,7 @@ void nr_rrc_trigger_f1_ho(gNB_RRC_INST *rrc,
   ho_success_t success = nr_rrc_f1_ho_complete;
   ho_cancel_t cancel = nr_rrc_cancel_f1_ho;
   byte_array_t hpi = {.buf = buf, .len = size};
-  nr_initiate_handover(rrc, ue, source_cell, &hpi, ack, success, cancel, NULL);
+  nr_initiate_handover(rrc, ue, source_cell, &hpi, ack, success, nr_rrc_ho_finalize_cb, cancel, NULL);
 }
 
 void nr_rrc_finalize_ho(gNB_RRC_UE_t *ue)
@@ -598,7 +606,7 @@ void nr_rrc_trigger_n2_ho_target(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue)
   ho_success_t success = nr_rrc_n2_ho_complete;
   ho_failure_t failure = nr_rrc_n2_ho_failure;
 
-  nr_initiate_handover(rrc, ue, NULL, &ue->ho_context->target->ue_ho_prep_info, ack, success, NULL, failure);
+  nr_initiate_handover(rrc, ue, NULL, &ue->ho_context->target->ue_ho_prep_info, ack, success, nr_rrc_ho_finalize_cb, NULL, failure);
   FREE_AND_ZERO_BYTE_ARRAY(ue->ho_context->target->ue_ho_prep_info);
 
   NR_UE_NR_Capability_t *ue_cap = get_ue_nr_capability(ue->rnti, ue->ue_cap_buffer.buf, ue->ue_cap_buffer.len);
@@ -735,12 +743,23 @@ static void nr_rrc_xn_ho_acknowledge(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
   free_byte_array(hoCommand);
 }
 
+/** @brief Callback invoked on RRCReconfigurationComplete at target Xn gNB:
+ *         trigger NGAP Path Switch Request to AMF to update the data path. */
+static void nr_rrc_xn_ho_path_switch(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
+{
+  rrc_gNB_send_NGAP_PATH_SWITCH_REQUEST(rrc, UE);
+}
+
 /** @brief Trigger Xn Handover on the target gNB after E1 bearer setup:
  *         initiate F1 UE Context Setup toward the target DU. */
 void nr_rrc_trigger_xn_ho_target(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue)
 {
   ho_req_ack_t ack = nr_rrc_xn_ho_acknowledge;
-  nr_initiate_handover(rrc, ue, NULL, &ue->ho_context->target->ue_ho_prep_info, ack, NULL, NULL, NULL);
+  /* ho_success = NULL: no immediate network announcement on RRCReconfigComplete.
+   * ho_reconfig_ack = nr_rrc_xn_ho_path_switch: triggers Path Switch Request.
+   * ho_release_source is set below: called from Path Switch Ack handler. */
+  nr_initiate_handover(rrc, ue, NULL, &ue->ho_context->target->ue_ho_prep_info, ack, NULL, nr_rrc_xn_ho_path_switch, NULL, NULL);
+  ue->ho_context->target->ho_release_source = rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE;
   FREE_AND_ZERO_BYTE_ARRAY(ue->ho_context->target->ue_ho_prep_info);
 }
 
