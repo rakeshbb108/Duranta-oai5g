@@ -7,6 +7,7 @@
 
 #include "nr_rrc_defs.h"
 #include "openair2/COMMON/xnap_messages_types.h"
+#include "openair2/COMMON/gtpv1_u_messages_types.h"
 
 void rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
                                         gNB_RRC_UE_t *UE,
@@ -34,5 +35,7 @@ void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE);
 int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
                                               instance_t instance,
                                               xnap_ue_context_release_t *msg);
+
+void rrc_gNB_process_XNU_FORWARDING_COMPLETE(gNB_RRC_INST *rrc, const gtpv1u_xnu_forwarding_complete_t *msg);
 
 #endif /* RRC_GNB_XNAP_H_ */
