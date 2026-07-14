@@ -23,7 +23,10 @@
 #include "common/utils/LOG/log.h"
 #include "common/utils/ds/byte_array.h"
 #include "assertions.h"
+#include "openair2/F1AP/f1ap_ids.h"
 #include "openair2/XNAP/xnap_ids.h"
+#include "openair2/LAYER2/nr_pdcp/cucp_cuup_handler.h"
+#include "common/platform_constants.h"
 #include "intertask_interface.h"
 #include "aper_encoder.h"
 
@@ -541,4 +544,108 @@ int rrc_gNB_process_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
   }
 
   return 0;
+}
+
+void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
+{
+  AssertFatal(UE->ho_context != NULL, "UE %u: ho_context is NULL\n", UE->rrc_ue_id);
+  AssertFatal(UE->ho_context->target != NULL, "UE %u: target context is NULL\n", UE->rrc_ue_id);
+
+  LOG_I(NR_RRC, "UE %u: sending XNAP UE Context Release to source gNB\n", UE->rrc_ue_id);
+
+  int n_xnu = 0;
+  int xnu_pdu_ids[NR_MAX_NB_PDU_SESSIONS];
+  FOR_EACH_SEQ_ARR(rrc_pdu_session_param_t *, p, &UE->pduSessions) {
+    if (p->status == PDU_SESSION_STATUS_ESTABLISHED)
+      xnu_pdu_ids[n_xnu++] = p->param.pdusession_id;
+  }
+  if (n_xnu > 0)
+    e1_remove_xnu_tunnels(UE->rrc_ue_id, n_xnu, xnu_pdu_ids);
+
+  xnap_ue_context_release_t msg = {
+    .s_ng_node_ue_xnap_id = UE->ho_context->target->src_ue_xnap_id,
+    .t_ng_node_ue_xnap_id = UE->ho_context->target->target_ue_id,
+  };
+
+  MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_UE_CONTEXT_RELEASE);
+  XNAP_UE_CONTEXT_RELEASE(msg_p) = msg;
+  itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
+
+  nr_rrc_finalize_ho(UE);
+}
+
+int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
+                                              instance_t instance,
+                                              xnap_ue_context_release_t *msg)
+{
+  if (!xnap_exists_ue_data(msg->s_ng_node_ue_xnap_id)) {
+    LOG_W(NR_RRC, "[gNB %ld] XNAP UE Context Release: unknown s_xnap_ue_id=%u\n",
+          instance, msg->s_ng_node_ue_xnap_id);
+    return -1;
+  }
+  xnap_ue_data_t ue_data = xnap_get_ue_data(msg->s_ng_node_ue_xnap_id);
+  xnap_remove_ue_data(msg->s_ng_node_ue_xnap_id);
+
+  rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, ue_data.rrc_ue_id);
+  if (ue_ctx == NULL) {
+    LOG_W(NR_RRC, "[gNB %ld] XNAP UE Context Release: unknown UE rrc_ue_id=%u\n",
+          instance, ue_data.rrc_ue_id);
+    return -1;
+  }
+  gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
+  LOG_I(NR_RRC, "UE %u: XNAP UE Context Release received from target — releasing source UE\n",
+        UE->rrc_ue_id);
+
+  nr_rrc_finalize_ho(UE);
+
+  if (ue_associated_to_cuup(UE)) {
+    sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
+    e1ap_cause_t cause = {.type = E1AP_CAUSE_RADIO_NETWORK, .value = E1AP_RADIO_CAUSE_NORMAL_RELEASE};
+    e1ap_bearer_release_cmd_t cmd = {
+      .gNB_cu_cp_ue_id = UE->rrc_ue_id,
+      .gNB_cu_up_ue_id = UE->rrc_ue_id,
+      .cause = cause,
+    };
+    rrc->cucp_cuup.bearer_context_release(assoc_id, &cmd);
+  }
+
+  if (cu_exists_f1_ue_data(UE->rrc_ue_id) && cu_get_f1_ue_data(UE->rrc_ue_id).du_assoc_id != 0)
+    rrc_gNB_generate_RRCRelease(rrc, UE);
+  else
+    rrc_remove_ue(rrc, ue_ctx);
+
+  return 0;
+}
+
+/** @brief Target gNB: Xn-U DL forwarding for one DRB ended (GTP-U End Marker received on
+ *  the Xn-U instance). Release that DRB's forwarding tunnel now instead of waiting for UE
+ *  Context Release. The source's N3-side forwarding tunnel is shared per PDU session, so a
+ *  path-switch on the core side can legitimately emit one End Marker per QoS flow — release
+ *  is scoped to msg->rb_id so a second, redundant notification for the same DRB just no-ops
+ *  in e1_remove_xnu_tunnels()/newGtpuDeleteOneTunnel() instead of re-touching every DRB. */
+void rrc_gNB_process_XNU_FORWARDING_COMPLETE(gNB_RRC_INST *rrc, const gtpv1u_xnu_forwarding_complete_t *msg)
+{
+  rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, msg->ue_id);
+  if (ue_ctx == NULL) {
+    LOG_W(NR_RRC, "Xn-U forwarding complete: unknown UE rrc_ue_id=%lu\n", msg->ue_id);
+    return;
+  }
+  gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
+  if (!UE->ho_context || !UE->ho_context->target) {
+    LOG_I(NR_RRC,
+          "UE %u: Xn-U forwarding complete for DRB %d (PDU session %d) after handover context already released — ignoring\n",
+          UE->rrc_ue_id,
+          msg->rb_id,
+          msg->pdusession_id);
+    return;
+  }
+
+  LOG_I(NR_RRC,
+        "UE %u: Xn-U DL forwarding complete for DRB %d (PDU session %d) — releasing tunnel\n",
+        UE->rrc_ue_id,
+        msg->rb_id,
+        msg->pdusession_id);
+
+  int drb_id = msg->rb_id;
+  e1_remove_xnu_tunnels(UE->rrc_ue_id, 1, &drb_id);
 }

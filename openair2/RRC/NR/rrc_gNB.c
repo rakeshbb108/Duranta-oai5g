@@ -3926,6 +3926,15 @@ void *rrc_gnb_task(void *args_p)
                                                  &XNAP_SN_STATUS_TRANSFER(msg_p));
         break;
 
+      case XNAP_UE_CONTEXT_RELEASE:
+        rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(RC.nrrrc[instance], instance,
+                                                 &XNAP_UE_CONTEXT_RELEASE(msg_p));
+        break;
+
+      case GTPV1U_XNU_FORWARDING_COMPLETE:
+        rrc_gNB_process_XNU_FORWARDING_COMPLETE(RC.nrrrc[instance], &GTPV1U_XNU_FORWARDING_COMPLETE(msg_p));
+        break;
+
       default:
         LOG_E(NR_RRC, "[gNB %ld] Received unexpected message %s\n", instance, msg_name_p);
         break;

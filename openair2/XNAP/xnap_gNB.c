@@ -195,6 +195,36 @@ static void xnap_gNB_handle_register_gnb(instance_t instance, xnap_register_gnb_
   itti_send_msg_to_task(TASK_SCTP, instance, msg);
 }
 
+/* Target gNB: RRC sends UE Context Release — encode and send to source */
+static void xnap_gNB_generate_ue_context_release(instance_t instance, xnap_ue_context_release_t *msg)
+{
+  xnap_gnb_inst_t *inst = getCxtXn(instance);
+  AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
+
+  xnap_target_ue_data_t tgt_data = xnap_get_target_ue_data(msg->t_ng_node_ue_xnap_id);
+  xnap_peer_t *peer = getXnPeerByAssoc(inst, tgt_data.source_assoc_id);
+  if (peer == NULL) {
+    LOG_E(XNAP, "[gNB %ld] UE Context Release: no peer for source_assoc_id %d\n",
+          instance, tgt_data.source_assoc_id);
+    return;
+  }
+
+  XNAP_XnAP_PDU_t *pdu = encode_xnap_ue_context_release(msg);
+  AssertFatal(pdu != NULL, "[gNB %ld] encode_xnap_ue_context_release() failed\n", instance);
+
+  uint8_t *buffer = NULL;
+  uint32_t length = 0;
+  int rc = xnap_gNB_encode_pdu(pdu, &buffer, &length);
+  ASN_STRUCT_FREE(asn_DEF_XNAP_XnAP_PDU, pdu);
+  AssertFatal(rc == 0, "[gNB %ld] encode_pdu() failed for UE Context Release\n", instance);
+
+  LOG_I(XNAP, "[gNB %ld] Sending UE Context Release to source assoc_id %d t_xnap_ue_id %u (%u bytes)\n",
+        instance, tgt_data.source_assoc_id, msg->t_ng_node_ue_xnap_id, length);
+
+  xnap_gNB_itti_send_sctp_data(instance, tgt_data.source_assoc_id, buffer, length, XNAP_NONUE_STREAM_ID);
+  xnap_remove_target_ue_data(msg->t_ng_node_ue_xnap_id);
+}
+
 /* Phase 2: socket bound — connect to each configured peer */
 static void xnap_gNB_handle_sctp_init_msg_multi_cnf(instance_t instance,
                                                      sctp_init_msg_multi_cnf_t *cnf)
@@ -411,6 +441,10 @@ void *xnap_task(void *args)
 
       case XNAP_SN_STATUS_TRANSFER:
         xnap_gNB_generate_sn_status_transfer(instance, &XNAP_SN_STATUS_TRANSFER(msg));
+        break;
+
+      case XNAP_UE_CONTEXT_RELEASE:
+        xnap_gNB_generate_ue_context_release(instance, &XNAP_UE_CONTEXT_RELEASE(msg));
         break;
 
       default:

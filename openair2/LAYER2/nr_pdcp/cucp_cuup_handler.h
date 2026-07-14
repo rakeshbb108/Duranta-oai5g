@@ -6,6 +6,7 @@
 #define CUCP_CUUP_HANDLER_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 void nr_pdcp_e1_if_init(bool uses_e1);
 
@@ -16,5 +17,7 @@ void e1_bearer_context_setup(const struct e1ap_bearer_setup_req_s *req);
 void e1_bearer_context_modif(const struct e1ap_bearer_mod_req_s *req);
 void e1_bearer_release_cmd(const struct e1ap_bearer_release_cmd_s *cmd);
 void e1_reset(void);
+
+void e1_remove_xnu_tunnels(uint32_t ue_id, int n_pdu, int *pdu_ids);
 
 #endif /* CUCP_CUUP_HANDLER_H */

@@ -181,4 +181,13 @@ typedef struct gtpv1u_gnb_delete_tunnel_resp_s {
   teid_t                 gnb_NGu_teid;         ///< local NGU Tunnel Endpoint Identifier to be deleted
 } gtpv1u_gnb_delete_tunnel_resp_t;
 
+/** @brief Notifies RRC that Xn-U DL forwarding for one DRB ended (End Marker received on the Xn-U instance) */
+typedef struct gtpv1u_xnu_forwarding_complete_s {
+  ue_id_t ue_id;
+  int pdusession_id;
+  int rb_id;
+} gtpv1u_xnu_forwarding_complete_t;
+
+#define GTPV1U_XNU_FORWARDING_COMPLETE(mSGpTR) (mSGpTR)->ittiMsg.gtpv1uXnuForwardingComplete
+
 #endif /* GTPV1_U_MESSAGES_TYPES_H_ */

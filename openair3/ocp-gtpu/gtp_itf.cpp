@@ -1104,9 +1104,9 @@ static int Gtpv1uHandleSupportedExt()
   return rc;
 }
 
-// When end marker arrives, we notify the client with buffer size = 0
-// The client will likely call "delete tunnel"
-// nevertheless we don't take the initiative
+// When end marker arrives on the Xn-U instance, notify RRC so it can release
+// the forwarding tunnel deterministically instead of waiting for UE Context
+// Release. When chained (source side), relay the marker onward.
 static int Gtpv1uHandleEndMarker(int h, uint8_t *msgBuf)
 {
   Gtpv1uMsgHeaderT *msgHdr = (Gtpv1uMsgHeaderT *)msgBuf;
@@ -1123,36 +1123,44 @@ static int Gtpv1uHandleEndMarker(int h, uint8_t *msgBuf)
   auto tunnel = globGtp.te2ue_mapping.find(ntohl(msgHdr->teid));
 
   if (tunnel == globGtp.te2ue_mapping.end()) {
-    LOG_E(GTPU, "[%d] Received a incoming packet on unknown TEID (0x%x) Dropping!\n", h, msgHdr->teid);
+    LOG_E(GTPU, "[%d] Received a incoming packet on unknown TEID (0x%x) Dropping!\n", h, ntohl(msgHdr->teid));
     pthread_mutex_unlock(&globGtp.gtp_lock);
     return GTPNOK;
   }
 
-  // This context is not good for gtp
-  // frame, ... has no meaning
-  // manyother attributes may come from create tunnel
-  protocol_ctxt_t ctxt;
-  ctxt.module_id = 0;
-  ctxt.enb_flag = 1;
-  ctxt.instance = inst->addr.originInstance;
-  ctxt.rntiMaybeUEid = tunnel->second.ue_id;
-  ctxt.frame = 0;
-  ctxt.subframe = 0;
-  ctxt.eNB_index = 0;
-  ctxt.brOption = 0;
-  const srb_flag_t srb_flag = SRB_FLAG_NO;
-  const rb_id_t rb_id = tunnel->second.incoming_rb_id;
-  const mui_t mui = RLC_MUI_UNDEFINED;
-  const confirm_t confirm = RLC_SDU_CONFIRM_NO;
-  const pdcp_transmission_mode_t mode = PDCP_TRANSMISSION_MODE_DATA;
-  const uint32_t sourceL2Id = 0;
-  const uint32_t destinationL2Id = 0;
+  teid_t dl_fwd_teid = tunnel->second.dl_fwd_teid;
+  struct sockaddr_storage dl_fwd_addr = tunnel->second.dl_fwd_addr;
+  ue_id_t fwd_ue_id = tunnel->second.ue_id;
+  int pdusession_id = tunnel->second.pdusession_id;
+  int rb_id = tunnel->second.incoming_rb_id;
   pthread_mutex_unlock(&globGtp.gtp_lock);
 
-  if (!tunnel->second.callBack(&ctxt, srb_flag, rb_id, mui, confirm, 0, NULL, mode, &sourceL2Id, &destinationL2Id))
-    LOG_E(GTPU, "[%d] down layer refused incoming packet\n", h);
-
   LOG_D(GTPU, "[%d] Received END marker packet for: TEID:0x%x\n", h, ntohl(msgHdr->teid));
+
+  if (dl_fwd_teid != 0) {
+    Gtpv1uMsgHeaderT em = {};
+    em.PT = 1;
+    em.version = 1;
+    em.msgType = GTP_END_MARKER;
+    em.msgLength = htons(0);
+    em.teid = htonl(dl_fwd_teid);
+    DevAssert(dl_fwd_addr.ss_family == AF_INET);
+    const struct sockaddr_in *to = (const struct sockaddr_in *)&dl_fwd_addr;
+    LOG_I(GTPU, "[%d] UE %lu: forwarding End Marker to Xn-U DL fwd TEID 0x%x\n", h, fwd_ue_id, dl_fwd_teid);
+    ssize_t ret = sendto(h, &em, sizeof(em), 0, (const struct sockaddr *)to, sizeof(*to));
+    if (ret != (ssize_t)sizeof(em))
+      LOG_E(GTPU, "[%d] Failed to forward End Marker: ret %ld errno %d\n", h, ret, errno);
+  }
+
+  if (XnUGTPUInst && h == *XnUGTPUInst) {
+    LOG_I(GTPU, "[%d] UE %lu: Xn-U forwarding complete for DRB %d (PDU session %d)\n", h, fwd_ue_id, rb_id, pdusession_id);
+    MessageDef *msg = itti_alloc_new_message(TASK_GTPV1_U, 0, GTPV1U_XNU_FORWARDING_COMPLETE);
+    GTPV1U_XNU_FORWARDING_COMPLETE(msg).ue_id = fwd_ue_id;
+    GTPV1U_XNU_FORWARDING_COMPLETE(msg).pdusession_id = pdusession_id;
+    GTPV1U_XNU_FORWARDING_COMPLETE(msg).rb_id = rb_id;
+    itti_send_msg_to_task(TASK_RRC_GNB, 0, msg);
+  }
+
   return !GTPNOK;
 }
 
