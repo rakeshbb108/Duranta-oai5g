@@ -231,6 +231,16 @@ static void xnap_encode_pdusession_resources_to_be_setup_list(const xnap_pdusess
       arp->pre_emption_capability = qos->qos_params.arp.pre_emp_capability;
       arp->pre_emption_vulnerability = qos->qos_params.arp.pre_emp_vulnerability;
     }
+
+    if (pdu->dl_forwarding_proposed) {
+      asn1cCalloc(pduItem->dataforwardinginfofromSource, fwdInfo);
+      for (int j = 0; j < pdu->num_qos; j++) {
+        asn1cSequenceAdd(fwdInfo->qosFlowsToBeForwarded.list, XNAP_QoSFLowsToBeForwarded_Item_t, fwdItem);
+        fwdItem->qosFlowIdentifier = pdu->qos_list[j].qfi;
+        fwdItem->dl_dataforwarding = XNAP_DLForwarding_dl_forwarding_proposed;
+        fwdItem->ul_dataforwarding = XNAP_ULForwarding_ul_forwarding_proposed;
+      }
+    }
   }
 }
 
@@ -262,6 +272,9 @@ static bool decode_xnap_pdusession_resources_to_be_setup_list(const XNAP_PDUSess
 
     if (!decode_xnap_qos_flows_to_be_setup_list(&pdu->qosFlowsToBeSetup_List, dst))
       return false;
+
+    if (pdu->dataforwardinginfofromSource)
+      dst->dl_forwarding_proposed = true;
   }
 
   return true;

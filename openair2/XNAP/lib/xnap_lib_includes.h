@@ -38,6 +38,11 @@
 #include "XNAP_QoSFLowsAcceptedToBeForwarded-List.h"
 #include "XNAP_QoSFLowsAcceptedToBeForwarded-Item.h"
 
+#include "XNAP_DataforwardingandOffloadingInfofromSource.h"
+#include "XNAP_QoSFLowsToBeForwarded-Item.h"
+#include "XNAP_DLForwarding.h"
+#include "XNAP_ULForwarding.h"
+
 #include "XNAP_DRBsSubjectToStatusTransfer-Item.h"
 #include "XNAP_DRBBStatusTransfer18bitsSN.h"
 #include "XNAP_DRBBStatusTransfer12bitsSN.h"
