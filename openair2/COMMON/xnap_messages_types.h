@@ -16,6 +16,7 @@
 #define XNAP_PEER_SHUTDOWN_IND(mSGpTR)    (mSGpTR)->ittiMsg.xnap_peer_shutdown_ind
 #define XNAP_HANDOVER_REQ(mSGpTR)         (mSGpTR)->ittiMsg.xnap_handover_req
 #define XNAP_HANDOVER_REQ_ACK(mSGpTR)     (mSGpTR)->ittiMsg.xnap_handover_req_ack
+#define XNAP_HANDOVER_PREP_FAILURE(mSGpTR) (mSGpTR)->ittiMsg.xnap_handover_prep_failure
 #define XNAP_SN_STATUS_TRANSFER(mSGpTR)   (mSGpTR)->ittiMsg.xnap_sn_status_transfer
 #define XNAP_UE_CONTEXT_RELEASE(mSGpTR)   (mSGpTR)->ittiMsg.xnap_ue_context_release
 
@@ -356,6 +357,9 @@ typedef struct {
   uint32_t s_ng_node_ue_xnap_id;
   // Cause (M)
   xnap_cause_t cause;
+  /* Routing fields — not part of the XnAP PDU */
+  uint32_t rrc_ue_id;     /* source XNAP->RRC: looked up from the UE mapping */
+  sctp_assoc_t assoc_id;  /* target RRC->XNAP: assoc of the source peer */
 } xnap_handover_preparation_failure_t;
 
 /** 3GPP TS 38.423 – 9.1.1.4 SN Status Transfer 

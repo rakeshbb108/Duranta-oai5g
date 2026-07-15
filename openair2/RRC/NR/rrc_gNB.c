@@ -3921,6 +3921,10 @@ void *rrc_gnb_task(void *args_p)
         rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(RC.nrrrc[instance], &XNAP_HANDOVER_REQ_ACK(msg_p));
         break;
 
+      case XNAP_HANDOVER_PREP_FAILURE:
+        rrc_gNB_process_XNAP_HANDOVER_PREP_FAILURE(RC.nrrrc[instance], &XNAP_HANDOVER_PREP_FAILURE(msg_p));
+        break;
+
       case XNAP_SN_STATUS_TRANSFER:
         rrc_gNB_process_XNAP_SN_STATUS_TRANSFER(RC.nrrrc[instance], instance,
                                                  &XNAP_SN_STATUS_TRANSFER(msg_p));

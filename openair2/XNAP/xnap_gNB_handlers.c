@@ -259,6 +259,46 @@ static int xnap_gNB_handle_handover_request_acknowledge(instance_t instance,
   return 0;
 }
 
+/* Source gNB: receives HandoverPreparationFailure from target — decode, look up rrc_ue_id,
+ * drop the UE mapping (the HO preparation is over) and forward to RRC */
+static int xnap_gNB_handle_handover_prep_failure(instance_t instance,
+                                                  sctp_assoc_t assoc_id,
+                                                  uint32_t stream,
+                                                  xnap_gnb_inst_t *inst,
+                                                  xnap_peer_t *peer,
+                                                  XNAP_XnAP_PDU_t *pdu)
+{
+  (void)stream;
+  (void)peer;
+  LOG_I(XNAP, "[gNB %ld] Received HandoverPreparationFailure from assoc_id %d\n", instance, assoc_id);
+
+  xnap_handover_preparation_failure_t fail = {0};
+  if (!decode_xnap_handover_preparation_failure(&fail, pdu)) {
+    LOG_E(XNAP, "[gNB %ld] Failed to decode HandoverPreparationFailure from assoc_id %d\n",
+          instance, assoc_id);
+    return -1;
+  }
+
+  if (!xnap_exists_ue_data(fail.s_ng_node_ue_xnap_id)) {
+    LOG_E(XNAP, "[gNB %ld] HandoverPreparationFailure: unknown s_xnap_ue_id %u\n",
+          instance, fail.s_ng_node_ue_xnap_id);
+    return -1;
+  }
+  xnap_ue_data_t ue_data = xnap_get_ue_data(fail.s_ng_node_ue_xnap_id);
+  xnap_remove_ue_data(fail.s_ng_node_ue_xnap_id);
+
+  fail.rrc_ue_id = ue_data.rrc_ue_id;
+  fail.assoc_id  = assoc_id;
+
+  LOG_W(XNAP, "[gNB %ld] HandoverPreparationFailure: rrc_ue_id %u s_xnap_ue_id %u cause group %d value %d — notifying RRC\n",
+        instance, fail.rrc_ue_id, fail.s_ng_node_ue_xnap_id, fail.cause.type, fail.cause.value);
+
+  MessageDef *msg = itti_alloc_new_message(TASK_XNAP, inst->instance, XNAP_HANDOVER_PREP_FAILURE);
+  XNAP_HANDOVER_PREP_FAILURE(msg) = fail;
+  itti_send_msg_to_task(TASK_RRC_GNB, inst->instance, msg);
+  return 0;
+}
+
 /* Target gNB: receives HandoverRequest from source — decode and forward to RRC */
 static int xnap_gNB_handle_handover_request(instance_t instance,
                                                  sctp_assoc_t assoc_id,
@@ -357,7 +397,7 @@ static int xnap_gNB_handle_ue_context_release(instance_t instance,
 #define XNAP_NUM_PROC_CODES 38
 
 static const xnap_message_decoded_callback xnap_messages_callback[XNAP_NUM_PROC_CODES][3] = {
-  /*  0 handoverPreparation                             */ {xnap_gNB_handle_handover_request, xnap_gNB_handle_handover_request_acknowledge, 0},
+  /*  0 handoverPreparation                             */ {xnap_gNB_handle_handover_request, xnap_gNB_handle_handover_request_acknowledge, xnap_gNB_handle_handover_prep_failure},
   /*  1 sNStatusTransfer                                */ {xnap_gNB_handle_sn_status_transfer, 0, 0},
   /*  2 handoverCancel                                  */ {0, 0, 0},
   /*  3 retrieveUEContext                               */ {0, 0, 0},
