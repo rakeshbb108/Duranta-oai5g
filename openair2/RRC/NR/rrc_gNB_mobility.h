@@ -127,5 +127,6 @@ const nr_neighbour_cell_t *get_neighbour_cell_by_cell_id(const neighbour_cell_co
 void nr_HO_F1_trigger_telnet(gNB_RRC_INST *rrc, uint32_t rrc_ue_id);
 void nr_HO_N2_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t rrc_ue_id);
 void nr_HO_Xn_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t rrc_ue_id);
+void nr_HO_Xn_cancel_trigger_telnet(gNB_RRC_INST *rrc, uint32_t rrc_ue_id);
 
 #endif /* RRC_GNB_MOBILITY_H_ */
