@@ -714,6 +714,51 @@ int rrc_gNB_process_XNAP_HANDOVER_PREP_FAILURE(gNB_RRC_INST *rrc, const xnap_han
   return 0;
 }
 
+/* @brief Target gNB processes Handover Cancel from the source gNB.
+ * Two cases: after the HandoverRequestAck was sent, the UE is resolved through the
+ * target UE mapping (created at Ack generation); before that, no mapping exists and
+ * the UE is found by the source XnAP ID stored from the incoming HandoverRequest. */
+int rrc_gNB_process_XNAP_HANDOVER_CANCEL(gNB_RRC_INST *rrc, const xnap_handover_cancel_t *msg)
+{
+  rrc_gNB_ue_context_t *ue_ctx = NULL;
+
+  uint32_t t_xnap_ue_id = 0;
+  xnap_target_ue_data_t *ue_data = xnap_find_target_ue_by_source_id(msg->s_ng_node_ue_xnap_id, &t_xnap_ue_id);
+  if (ue_data != NULL) {
+    uint32_t rrc_ue_id = ue_data->rrc_ue_id;
+    xnap_remove_target_ue_data(t_xnap_ue_id);
+    ue_ctx = rrc_gNB_get_ue_context(rrc, rrc_ue_id);
+  } else {
+    rrc_gNB_ue_context_t *it = NULL;
+    RB_FOREACH(it, rrc_nr_ue_tree_s, &rrc->rrc_ue_head) {
+      gNB_RRC_UE_t *cand = &it->ue_context;
+      if (cand->ho_context && cand->ho_context->target
+          && cand->ho_context->target->src_ue_xnap_id == msg->s_ng_node_ue_xnap_id) {
+        ue_ctx = it;
+        break;
+      }
+    }
+  }
+
+  if (ue_ctx == NULL) {
+    LOG_W(NR_RRC, "Xn HandoverCancel: no UE for s_xnap_ue_id %u — dropping\n",
+          msg->s_ng_node_ue_xnap_id);
+    return -1;
+  }
+
+  gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
+  if (!UE->ho_context || !UE->ho_context->target) {
+    LOG_W(NR_RRC, "UE %u: Xn HandoverCancel but no target handover context — dropping\n", UE->rrc_ue_id);
+    return -1;
+  }
+
+  LOG_W(NR_RRC, "UE %u: Xn Handover Cancel from source (cause group %d value %d)\n",
+        UE->rrc_ue_id, msg->cause.type, msg->cause.value);
+
+  rrc_gNB_xn_ho_target_abort(rrc, UE, "HandoverCancel received from source gNB");
+  return 0;
+}
+
 /** @brief Abort an ongoing Xn handover at the target gNB: release the resources
  * prepared for the incoming UE (Xn-U forwarding tunnels, CU-UP bearers, target DU
  * context) and remove the UE context. */

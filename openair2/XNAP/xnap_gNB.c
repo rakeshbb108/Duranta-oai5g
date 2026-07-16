@@ -73,7 +73,9 @@ static void xnap_gNB_generate_handover_request_acknowledge(instance_t instance,
   }
 
   /* Record the target rrc_ue_id mapping under the RRC-allocated t_ng_node_ue_xnap_id */
-  xnap_target_ue_data_t ue_data = {.rrc_ue_id = ack->rrc_ue_id, .source_assoc_id = ack->source_assoc_id};
+  xnap_target_ue_data_t ue_data = {.rrc_ue_id = ack->rrc_ue_id,
+                                   .source_assoc_id = ack->source_assoc_id,
+                                   .s_ng_node_ue_xnap_id = ack->s_ng_node_ue_xnap_id};
   bool ok = xnap_add_target_ue_data(ack->t_ng_node_ue_xnap_id, &ue_data);
   AssertFatal(ok, "[gNB %ld] Failed to store target UE data for t_xnap_ue_id %u\n",
               instance, ack->t_ng_node_ue_xnap_id);
@@ -115,7 +117,9 @@ static void xnap_gNB_generate_handover_request(instance_t instance, xnap_handove
 
   /* Record the rrc_ue_id mapping under the RRC-allocated s_ng_node_ue_xnap_id so
    * incoming HandoverRequestAck / Failure can be routed back to the right UE */
-  xnap_ue_data_t ue_data = {.rrc_ue_id = req->rrc_ue_id, .target_assoc_id = req->target_assoc_id};
+  xnap_ue_data_t ue_data = {.rrc_ue_id = req->rrc_ue_id,
+                            .target_assoc_id = req->target_assoc_id,
+                            .t_ng_node_ue_xnap_id = -1};
   bool ok = xnap_add_ue_data(req->s_ng_node_ue_xnap_id, &ue_data);
   AssertFatal(ok, "[gNB %ld] Failed to store UE data for xnap_ue_id %u\n", instance, req->s_ng_node_ue_xnap_id);
 
@@ -257,6 +261,45 @@ static void xnap_gNB_generate_ue_context_release(instance_t instance, xnap_ue_co
 
   xnap_gNB_itti_send_sctp_data(instance, tgt_data.source_assoc_id, buffer, length, XNAP_NONUE_STREAM_ID);
   xnap_remove_target_ue_data(msg->t_ng_node_ue_xnap_id);
+}
+
+/* Source gNB: RRC cancels an ongoing handover — encode and send HandoverCancel to target */
+static void xnap_gNB_generate_handover_cancel(instance_t instance, xnap_handover_cancel_t *msg)
+{
+  xnap_gnb_inst_t *inst = getCxtXn(instance);
+  AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
+
+  if (!xnap_exists_ue_data(msg->s_ng_node_ue_xnap_id)) {
+    LOG_W(XNAP, "[gNB %ld] HandoverCancel: unknown s_xnap_ue_id %u — dropping\n",
+          instance, msg->s_ng_node_ue_xnap_id);
+    return;
+  }
+  xnap_ue_data_t ue_data = xnap_get_ue_data(msg->s_ng_node_ue_xnap_id);
+
+  xnap_peer_t *peer = getXnPeerByAssoc(inst, ue_data.target_assoc_id);
+  if (peer == NULL || peer->state != XNAP_PEER_STATE_CONNECTED) {
+    LOG_E(XNAP, "[gNB %ld] HandoverCancel: no connected peer for assoc_id %d\n",
+          instance, ue_data.target_assoc_id);
+    xnap_remove_ue_data(msg->s_ng_node_ue_xnap_id);
+    return;
+  }
+
+  XNAP_XnAP_PDU_t *pdu = encode_xnap_handover_cancel(msg);
+  AssertFatal(pdu != NULL, "[gNB %ld] encode_xnap_handover_cancel() failed\n", instance);
+
+  uint8_t *buffer = NULL;
+  uint32_t length = 0;
+  int rc = xnap_gNB_encode_pdu(pdu, &buffer, &length);
+  ASN_STRUCT_FREE(asn_DEF_XNAP_XnAP_PDU, pdu);
+  AssertFatal(rc == 0, "[gNB %ld] encode_pdu() failed for HandoverCancel\n", instance);
+
+  LOG_I(XNAP, "[gNB %ld] Sending HandoverCancel to target assoc_id %d s_xnap_ue_id %u "
+        "cause group %d value %d (%u bytes)\n",
+        instance, ue_data.target_assoc_id, msg->s_ng_node_ue_xnap_id,
+        msg->cause.type, msg->cause.value, length);
+
+  xnap_gNB_itti_send_sctp_data(instance, ue_data.target_assoc_id, buffer, length, XNAP_NONUE_STREAM_ID);
+  xnap_remove_ue_data(msg->s_ng_node_ue_xnap_id);
 }
 
 /* Phase 2: socket bound — connect to each configured peer */
@@ -483,6 +526,10 @@ void *xnap_task(void *args)
 
       case XNAP_UE_CONTEXT_RELEASE:
         xnap_gNB_generate_ue_context_release(instance, &XNAP_UE_CONTEXT_RELEASE(msg));
+        break;
+
+      case XNAP_HANDOVER_CANCEL:
+        xnap_gNB_generate_handover_cancel(instance, &XNAP_HANDOVER_CANCEL(msg));
         break;
 
       default:

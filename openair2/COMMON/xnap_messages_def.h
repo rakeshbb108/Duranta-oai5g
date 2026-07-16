@@ -21,3 +21,6 @@ MESSAGE_DEF(XNAP_SN_STATUS_TRANSFER,   MESSAGE_PRIORITY_MED, xnap_sn_status_tran
 
 /* UE Context Release: RRC -> XNAP (target sends) / XNAP -> RRC (source receives) */
 MESSAGE_DEF(XNAP_UE_CONTEXT_RELEASE,   MESSAGE_PRIORITY_MED, xnap_ue_context_release_t,   xnap_ue_context_release)
+
+/* Handover Cancel: RRC -> XNAP (source sends) / XNAP -> RRC (target receives) */
+MESSAGE_DEF(XNAP_HANDOVER_CANCEL,      MESSAGE_PRIORITY_MED, xnap_handover_cancel_t,      xnap_handover_cancel)

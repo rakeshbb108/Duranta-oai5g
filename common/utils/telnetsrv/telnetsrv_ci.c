@@ -265,6 +265,25 @@ int rrc_gNB_trigger_xn_ho(char *buf, int debug, telnet_printfunc_t prnt)
   return 0;
 }
 
+int rrc_gNB_trigger_xn_ho_cancel(char *buf, int debug, telnet_printfunc_t prnt)
+{
+  UNUSED(debug);
+  if (!RC.nrrrc)
+    ERROR_MSG_RET("no RRC present, cannot cancel Xn HO\n");
+
+  if (!buf)
+    ERROR_MSG_RET("Please provide UE id\n");
+  uint32_t ueId = strtol(buf, NULL, 10);
+
+  rrc_gNB_ue_context_t *ue_p = rrc_gNB_get_ue_context(RC.nrrrc[0], ueId);
+  if (!ue_p)
+    ERROR_MSG_RET("UE with id %u not found\n", ueId);
+
+  nr_HO_Xn_cancel_trigger_telnet(RC.nrrrc[0], ue_p->ue_context.rrc_ue_id);
+  prnt("Xn HO cancel triggered for UE %u\n", ueId);
+  return 0;
+}
+
 int force_ul_failure(char *buf, int debug, telnet_printfunc_t prnt)
 {
   UNUSED(debug);
@@ -442,6 +461,7 @@ static telnetshell_cmddef_t cicmds[] = {
     {"trigger_bwp_switch", "newBWPId [rnti(hex,opt)]", trigger_bwp_switch},
     {"trigger_n2_ho", "[neighbour_pci(uint32_t),ueId(uint32_t)]", rrc_gNB_trigger_n2_ho},
     {"trigger_xn_ho", "[neighbour_pci(uint32_t),ueId(uint32_t)]", rrc_gNB_trigger_xn_ho},
+    {"trigger_xn_ho_cancel", "[ueId(uint32_t)]", rrc_gNB_trigger_xn_ho_cancel},
     {"set_pusch_target_snr", "[somelongSNR(dec)]", set_pusch_target_snr},
     {"pdu_session_release", "[gNB_ue_ngap_id(int,opt)]", trigger_ngap_pdu_session_release},
     {"", "", NULL},

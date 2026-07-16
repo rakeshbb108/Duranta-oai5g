@@ -244,6 +244,7 @@ static int xnap_gNB_handle_handover_request_acknowledge(instance_t instance,
     return -1;
   }
   xnap_ue_data_t ue_data = xnap_get_ue_data(ack.s_ng_node_ue_xnap_id);
+  xnap_set_ue_target_id(ack.s_ng_node_ue_xnap_id, ack.t_ng_node_ue_xnap_id);
 
   /* Populate routing fields for RRC */
   ack.rrc_ue_id       = ue_data.rrc_ue_id;
@@ -387,6 +388,35 @@ static int xnap_gNB_handle_ue_context_release(instance_t instance,
 }
 
 /* ------------------------------------------------------------------ */
+/* Handover Cancel handler                                              */
+/* ------------------------------------------------------------------ */
+
+/* Target gNB: receives HandoverCancel from source — decode and forward to RRC */
+static int xnap_gNB_handle_handover_cancel(instance_t instance,
+                                            sctp_assoc_t assoc_id,
+                                            uint32_t stream,
+                                            xnap_gnb_inst_t *inst,
+                                            xnap_peer_t *peer,
+                                            XNAP_XnAP_PDU_t *pdu)
+{
+  (void)stream;
+  (void)peer;
+  LOG_I(XNAP, "[gNB %ld] Received HandoverCancel from assoc_id %d\n", instance, assoc_id);
+
+  xnap_handover_cancel_t msg = {0};
+  if (!decode_xnap_handover_cancel(&msg, pdu)) {
+    LOG_E(XNAP, "[gNB %ld] Failed to decode HandoverCancel from assoc_id %d\n",
+          instance, assoc_id);
+    return -1;
+  }
+
+  MessageDef *itti_msg = itti_alloc_new_message(TASK_XNAP, inst->instance, XNAP_HANDOVER_CANCEL);
+  XNAP_HANDOVER_CANCEL(itti_msg) = msg;
+  itti_send_msg_to_task(TASK_RRC_GNB, inst->instance, itti_msg);
+  return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Callback table                                                       */
 /*                                                                      */
 /* Indexed by [procedureCode][direction-1] where direction is:          */
@@ -399,7 +429,7 @@ static int xnap_gNB_handle_ue_context_release(instance_t instance,
 static const xnap_message_decoded_callback xnap_messages_callback[XNAP_NUM_PROC_CODES][3] = {
   /*  0 handoverPreparation                             */ {xnap_gNB_handle_handover_request, xnap_gNB_handle_handover_request_acknowledge, xnap_gNB_handle_handover_prep_failure},
   /*  1 sNStatusTransfer                                */ {xnap_gNB_handle_sn_status_transfer, 0, 0},
-  /*  2 handoverCancel                                  */ {0, 0, 0},
+  /*  2 handoverCancel                                  */ {xnap_gNB_handle_handover_cancel, 0, 0},
   /*  3 retrieveUEContext                               */ {0, 0, 0},
   /*  4 rANPaging                                       */ {0, 0, 0},
   /*  5 xnUAddressIndication                            */ {0, 0, 0},

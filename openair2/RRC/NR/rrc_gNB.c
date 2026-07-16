@@ -3935,6 +3935,10 @@ void *rrc_gnb_task(void *args_p)
                                                  &XNAP_UE_CONTEXT_RELEASE(msg_p));
         break;
 
+      case XNAP_HANDOVER_CANCEL:
+        rrc_gNB_process_XNAP_HANDOVER_CANCEL(RC.nrrrc[instance], &XNAP_HANDOVER_CANCEL(msg_p));
+        break;
+
       case GTPV1U_XNU_FORWARDING_COMPLETE:
         rrc_gNB_process_XNU_FORWARDING_COMPLETE(RC.nrrrc[instance], &GTPV1U_XNU_FORWARDING_COMPLETE(msg_p));
         break;

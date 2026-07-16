@@ -782,9 +782,17 @@ void nr_rrc_trigger_xn_ho_target(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue)
 
 static void nr_rrc_xn_ho_cancel(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 {
-  /* TODO: send XnAP HandoverCancel to target gNB */
-  LOG_W(NR_RRC, "UE %d: Xn HO cancel triggered — not yet implemented\n", UE->rrc_ue_id);
-  (void)rrc;
+  LOG_I(NR_RRC, "UE %d: cancelling Xn handover — sending HandoverCancel to target gNB\n", UE->rrc_ue_id);
+
+  xnap_handover_cancel_t msg = {
+    .s_ng_node_ue_xnap_id = UE->ho_context->source->src_ue_xnap_id,
+    .cause = {.type = XNAP_CAUSE_RADIO_NETWORK,
+              .value = XNAP_CAUSE_RADIO_NETWORK_LAYER_PROCEDURE_CANCELLED},
+  };
+
+  MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_HANDOVER_CANCEL);
+  XNAP_HANDOVER_CANCEL(msg_p) = msg;
+  itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
 }
 
 /** @brief Trigger Xn handover on source gNB:
@@ -836,6 +844,24 @@ void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
     nr_rrc_finalize_ho(ue);
   }
   free_byte_array(hoPrepInfo);
+}
+
+void nr_HO_Xn_cancel_trigger_telnet(gNB_RRC_INST *rrc, uint32_t rrc_ue_id)
+{
+  rrc_gNB_ue_context_t *ue_context_p = rrc_gNB_get_ue_context(rrc, rrc_ue_id);
+  if (ue_context_p == NULL) {
+    LOG_E(NR_RRC, "Xn HO cancel failed for UE %d: UE context not found\n", rrc_ue_id);
+    return;
+  }
+  gNB_RRC_UE_t *UE = &ue_context_p->ue_context;
+
+  if (UE->ho_context == NULL || UE->ho_context->source == NULL) {
+    LOG_E(NR_RRC, "Xn HO cancel failed for UE %d: no ongoing handover at source\n", rrc_ue_id);
+    return;
+  }
+
+  UE->ho_context->source->ho_cancel(rrc, UE);
+  nr_rrc_finalize_ho(UE);
 }
 
 void nr_HO_Xn_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t rrc_ue_id)

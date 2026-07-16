@@ -19,14 +19,16 @@
 
 /* Source-side entry: keyed on s_ng_node_ue_xnap_id */
 typedef struct {
-  uint32_t     rrc_ue_id;       /* RRC UE ID at source gNB */
-  sctp_assoc_t target_assoc_id; /* SCTP association to the target gNB */
+  uint32_t     rrc_ue_id;            /* RRC UE ID at source gNB */
+  sctp_assoc_t target_assoc_id;      /* SCTP association to the target gNB */
+  uint32_t     t_ng_node_ue_xnap_id; /* target XnAP UE ID; -1 until HandoverRequestAck arrives */
 } xnap_ue_data_t;
 
 /* Target-side entry: keyed on t_ng_node_ue_xnap_id */
 typedef struct {
-  uint32_t     rrc_ue_id;       /* RRC UE ID at target gNB */
-  sctp_assoc_t source_assoc_id; /* SCTP association back to the source gNB */
+  uint32_t     rrc_ue_id;            /* RRC UE ID at target gNB */
+  sctp_assoc_t source_assoc_id;      /* SCTP association back to the source gNB */
+  uint32_t     s_ng_node_ue_xnap_id; /* source XnAP UE ID from the HandoverRequest */
 } xnap_target_ue_data_t;
 
 /* Call once when the XNAP task starts */
@@ -38,6 +40,7 @@ bool           xnap_add_ue_data(uint32_t xnap_ue_id, const xnap_ue_data_t *data)
 bool           xnap_exists_ue_data(uint32_t xnap_ue_id);
 xnap_ue_data_t xnap_get_ue_data(uint32_t xnap_ue_id);
 bool           xnap_remove_ue_data(uint32_t xnap_ue_id);
+bool           xnap_set_ue_target_id(uint32_t xnap_ue_id, uint32_t t_xnap_ue_id);
 
 /* Target-side table: keyed on t_ng_node_ue_xnap_id */
 uint32_t              xnap_alloc_target_ue_id(void);
@@ -45,5 +48,6 @@ bool                  xnap_add_target_ue_data(uint32_t t_xnap_ue_id, const xnap_
 bool                  xnap_exists_target_ue_data(uint32_t t_xnap_ue_id);
 xnap_target_ue_data_t xnap_get_target_ue_data(uint32_t t_xnap_ue_id);
 bool                  xnap_remove_target_ue_data(uint32_t t_xnap_ue_id);
+xnap_target_ue_data_t *xnap_find_target_ue_by_source_id(uint32_t s_xnap_ue_id, uint32_t *t_xnap_ue_id);
 
 #endif /* XNAP_IDS_H_ */

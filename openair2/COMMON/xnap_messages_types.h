@@ -19,6 +19,7 @@
 #define XNAP_HANDOVER_PREP_FAILURE(mSGpTR) (mSGpTR)->ittiMsg.xnap_handover_prep_failure
 #define XNAP_SN_STATUS_TRANSFER(mSGpTR)   (mSGpTR)->ittiMsg.xnap_sn_status_transfer
 #define XNAP_UE_CONTEXT_RELEASE(mSGpTR)   (mSGpTR)->ittiMsg.xnap_ue_context_release
+#define XNAP_HANDOVER_CANCEL(mSGpTR)      (mSGpTR)->ittiMsg.xnap_handover_cancel
 
 typedef struct {
   // PLMN Identity (M)
