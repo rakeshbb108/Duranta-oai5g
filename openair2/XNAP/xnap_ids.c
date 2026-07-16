@@ -88,6 +88,18 @@ bool xnap_remove_ue_data(uint32_t xnap_ue_id)
   return rc == HASH_TABLE_OK;
 }
 
+bool xnap_set_ue_target_id(uint32_t xnap_ue_id, uint32_t t_xnap_ue_id)
+{
+  pthread_mutex_lock(&xnap_ue_mutex);
+  DevAssert(xnap_ue_mapping != NULL);
+  void *data = NULL;
+  hashtable_rc_t rc = hashtable_get(xnap_ue_mapping, xnap_ue_id, &data);
+  if (rc == HASH_TABLE_OK && data != NULL)
+    ((xnap_ue_data_t *)data)->t_ng_node_ue_xnap_id = t_xnap_ue_id;
+  pthread_mutex_unlock(&xnap_ue_mutex);
+  return rc == HASH_TABLE_OK && data != NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* Target-side table                                                    */
 /* ------------------------------------------------------------------ */
@@ -145,4 +157,23 @@ bool xnap_remove_target_ue_data(uint32_t t_xnap_ue_id)
   hashtable_rc_t rc = hashtable_remove(xnap_target_ue_mapping, t_xnap_ue_id);
   pthread_mutex_unlock(&xnap_target_ue_mutex);
   return rc == HASH_TABLE_OK;
+}
+
+xnap_target_ue_data_t *xnap_find_target_ue_by_source_id(uint32_t s_xnap_ue_id, uint32_t *t_xnap_ue_id)
+{
+  xnap_target_ue_data_t *found = NULL;
+  pthread_mutex_lock(&xnap_target_ue_mutex);
+  DevAssert(xnap_target_ue_mapping != NULL);
+  for (hash_size_t i = 0; i < xnap_target_ue_mapping->size && !found; i++) {
+    for (hash_node_t *node = xnap_target_ue_mapping->nodes[i]; node != NULL; node = node->next) {
+      xnap_target_ue_data_t *entry = node->data;
+      if (entry->s_ng_node_ue_xnap_id == s_xnap_ue_id) {
+        *t_xnap_ue_id = (uint32_t)node->key;
+        found = entry;
+        break;
+      }
+    }
+  }
+  pthread_mutex_unlock(&xnap_target_ue_mutex);
+  return found;
 }
