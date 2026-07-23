@@ -2854,11 +2854,20 @@ static void rrc_CU_process_ue_context_release_complete(MessageDef *msg_p)
   }
 
   gNB_RRC_UE_t *UE = &ue_context_p->ue_context;
-  if (UE->an_release) {
-    /* only trigger release if it has been requested by core
-     * otherwise, it might be CU that requested release on a DU during normal
-     * operation (i.e, handover) */
+  if (UE->an_release)
     rrc_gNB_send_NGAP_UE_CONTEXT_RELEASE_COMPLETE(0, UE->rrc_ue_id, &UE->pduSessions);
+
+  /* Only destroy the UE context if the DU that just confirmed release is still this
+   * UE's current DU. If an F1 handover has since moved it to a new DU, this completion
+   * is for the stale old association and must not tear down the live context. */
+  sctp_assoc_t origin_assoc_id = msg_p->ittiMsgHeader.originInstance;
+  if (cu_get_f1_ue_data(UE->rrc_ue_id).du_assoc_id == origin_assoc_id) {
+    /* an_release already triggered the AMF-facing release above, which also detaches this
+     * gNB's local NGAP context. For any other release reason (e.g. Xn HO), nothing else
+     * would ever detach it, so do it here to avoid a stale entry colliding with a later
+     * UE that reuses this rrc_ue_id (== gNB_ue_ngap_id). */
+    if (!UE->an_release)
+      rrc_gNB_send_NGAP_UE_CONTEXT_DETACH(UE->rrc_ue_id);
     rrc_remove_ue(RC.nrrrc[0], ue_context_p);
   }
 }

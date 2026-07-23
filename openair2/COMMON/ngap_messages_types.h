@@ -36,6 +36,7 @@
 #define NGAP_INITIAL_CONTEXT_SETUP_REQ(mSGpTR)  (mSGpTR)->ittiMsg.ngap_initial_context_setup_req
 #define NGAP_UE_CONTEXT_RELEASE_COMMAND(mSGpTR) (mSGpTR)->ittiMsg.ngap_ue_release_command
 #define NGAP_UE_CONTEXT_RELEASE_COMPLETE(mSGpTR) (mSGpTR)->ittiMsg.ngap_ue_release_complete
+#define NGAP_UE_CONTEXT_DETACH(mSGpTR) (mSGpTR)->ittiMsg.ngap_ue_context_detach
 #define NGAP_PDUSESSION_SETUP_REQ(mSGpTR)              (mSGpTR)->ittiMsg.ngap_pdusession_setup_req
 #define NGAP_PDUSESSION_MODIFY_REQ(mSGpTR)              (mSGpTR)->ittiMsg.ngap_pdusession_modify_req
 #define NGAP_PAGING_IND(mSGpTR)                 (mSGpTR)->ittiMsg.ngap_paging_ind
@@ -928,6 +929,14 @@ typedef struct {
   // PDU Session ID (mandatory)
   uint8_t pdu_session_id[NR_MAX_NB_PDU_SESSIONS];
 } ngap_ue_release_complete_t;
+
+/** @brief Detach and free this gNB's local NGAP UE context (no AMF signalling): used when
+ *  RRC releases a UE for a reason other than a core-triggered release (e.g. Xn handover),
+ *  so the gNB_ue_ngap_id can be safely reused without colliding with a stale entry. */
+typedef struct {
+  // RAN UE NGAP ID (mandatory)
+  uint32_t gNB_ue_ngap_id;
+} ngap_ue_context_detach_t;
 
 /* QoS Flow to Release Item (9.3.1.13 3GPP TS 38.413) */
 typedef struct qos_flow_to_release_s {

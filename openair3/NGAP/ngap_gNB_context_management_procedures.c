@@ -109,6 +109,13 @@ int ngap_ue_context_release_complete(instance_t instance,
   return 0;
 }
 
+void ngap_gNB_ue_context_detach(instance_t instance, ngap_ue_context_detach_t *detach)
+{
+  ngap_gNB_ue_context_t *tmp = ngap_detach_ue_context(detach->gNB_ue_ngap_id);
+  if (tmp)
+    free(tmp);
+}
+
 int ngap_ue_context_release_req(instance_t instance,
                                 ngap_ue_release_req_t *ue_release_req_p)
 {
