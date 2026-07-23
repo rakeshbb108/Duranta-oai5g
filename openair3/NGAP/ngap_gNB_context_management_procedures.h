@@ -17,6 +17,8 @@
 int ngap_ue_context_release_complete(instance_t instance,
                                      ngap_ue_release_complete_t *ue_release_complete_p);
 
+void ngap_gNB_ue_context_detach(instance_t instance, ngap_ue_context_detach_t *detach);
+
 int ngap_ue_context_release_req(instance_t instance,
                                 ngap_ue_release_req_t *ue_release_req_p);
 
