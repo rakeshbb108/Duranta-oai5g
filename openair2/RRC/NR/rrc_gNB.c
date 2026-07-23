@@ -2625,6 +2625,8 @@ void e1_notify_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const rrc_drb_pd
   req.pduSessionMod = calloc_or_fail(num_pdu_sessions, sizeof(*req.pduSessionMod));
 
   FOR_EACH_SEQ_ARR(drb_t *, drb, &UE->drbs) {
+    if (drb->drb_id != drb_status->drb_id)
+      continue;
     LOG_I(NR_RRC, "Forward PDCP Status to CU-UP (drb_id=%d)\n", drb->drb_id);
     bearer_context_pdcp_config_t pdcp_config = set_bearer_context_pdcp_config(drb->pdcp_config, rrc->configuration.um_on_default_drb, UE->redcap_cap);
     DRB_nGRAN_to_mod_t drb_to_mod = get_e1_drb_mod_pdcp_status(drb, &pdcp_config, drb_status);
