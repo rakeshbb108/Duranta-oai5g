@@ -441,6 +441,21 @@ static const qfi2drb_t *nr_sdap_qfi2drb(const nr_sdap_entity_t *entity, uint8_t 
   }
 }
 
+/** Resolve the DL DRB a given QFI maps to for this UE/PDU session, using the
+ * same rule as the tx path (explicit mapping, else default DRB). Returns 0 if
+ * no entity or no mapping/default exists. Used to demux Xn HO forwarded backlog
+ * SDUs (which arrive pre-SDAP-header) directly to the right DRB's PDCP. */
+int nr_sdap_get_drb_from_qfi(ue_id_t ue_id, int pdusession_id, uint8_t qfi)
+{
+  if (qfi >= SDAP_MAX_QFI)
+    return 0;
+  nr_sdap_entity_t *entity = nr_sdap_get_entity(ue_id, pdusession_id);
+  if (entity == NULL)
+    return 0;
+  const qfi2drb_t *row = entity->qfi2drb_map(entity, qfi);
+  return row != NULL ? row->drb_id : 0;
+}
+
 nr_sdap_ul_hdr_t nr_sdap_construct_ctrl_pdu(uint8_t qfi){
   nr_sdap_ul_hdr_t sdap_end_marker_hdr;
   sdap_end_marker_hdr.QFI = qfi;

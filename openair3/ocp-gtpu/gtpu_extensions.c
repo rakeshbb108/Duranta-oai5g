@@ -8,8 +8,10 @@
 #include "LOG/log.h"
 
 /* 29.281 Figure 5.2.1-3 */
+#define LONG_PDCP_PDU_NUMBER    0x82
 #define NR_RAN_CONTAINER        0x84
 #define PDU_SESSION_CONTAINER   0x85
+#define PDCP_PDU_NUMBER         0xc0
 
 /* from an extension type, returns its "extension header type"
  * as defined in 29.281 Figure 5.2.1-3
@@ -25,9 +27,34 @@ int serialize_gtpu_extension_type(gtpu_extension_header_type_t type)
     case GTPU_EXT_DL_DATA_DELIVERY_STATUS:
     case GTPU_EXT_DL_USER_DATA:
       return NR_RAN_CONTAINER;
+    case GTPU_EXT_PDCP_PDU_NUMBER:
+      return PDCP_PDU_NUMBER;
+    case GTPU_EXT_LONG_PDCP_PDU_NUMBER:
+      return LONG_PDCP_PDU_NUMBER;
     default:
       AssertFatal(0, "unknown GTPU extension type %d\n", type);
   }
+}
+
+/* returns 0 on error, 1 on success */
+static int serialize_pdcp_pdu_number(byte_array_producer_t *b, pdcp_pdu_number_t *ext)
+{
+  /* see 29.281 5.2.2.2: 15-bit PDCP PDU number, bit 8 of octet 2 spare */
+  uint8_t b1 = (ext->pdcp_pdu_number >> 8) & 0x7f;
+  uint8_t b2 = ext->pdcp_pdu_number & 0xff;
+  return byte_array_producer_put_byte(b, b1) && byte_array_producer_put_byte(b, b2);
+}
+
+/* returns 0 on error, 1 on success */
+static int serialize_long_pdcp_pdu_number(byte_array_producer_t *b, pdcp_pdu_number_t *ext)
+{
+  /* see 29.281 5.2.2.2A: 18-bit PDCP PDU number, bits 8..3 of octet 2 spare;
+   * the trailing spare octets 5-7 are added by the padding in
+   * serialize_extension() */
+  uint8_t b1 = (ext->pdcp_pdu_number >> 16) & 0x03;
+  uint8_t b2 = (ext->pdcp_pdu_number >> 8) & 0xff;
+  uint8_t b3 = ext->pdcp_pdu_number & 0xff;
+  return byte_array_producer_put_byte(b, b1) && byte_array_producer_put_byte(b, b2) && byte_array_producer_put_byte(b, b3);
 }
 
 /* returns 0 on error, 1 on success */
@@ -68,6 +95,14 @@ int serialize_extension(gtpu_extension_header_t *ext, gtpu_extension_header_type
     case GTPU_EXT_DL_USER_DATA:
       /* TS 38.425 Figure 5.5.2.1-1: NR-UP payload only */
       if (!encode_nrup_dl_user_data(&b, &ext->dl_user_data))
+        goto error;
+      break;
+    case GTPU_EXT_PDCP_PDU_NUMBER:
+      if (!serialize_pdcp_pdu_number(&b, &ext->pdcp_pdu_number))
+        goto error;
+      break;
+    case GTPU_EXT_LONG_PDCP_PDU_NUMBER:
+      if (!serialize_long_pdcp_pdu_number(&b, &ext->pdcp_pdu_number))
         goto error;
       break;
     default:

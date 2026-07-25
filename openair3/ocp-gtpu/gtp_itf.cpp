@@ -23,6 +23,7 @@ extern "C" {
 
 // TODO these dependencies should not exist and be removed
 #include "openair2/LAYER2/nr_rlc/nr_rlc_oai_api.h"
+#include "openair2/LAYER2/nr_pdcp/nr_pdcp_oai_api.h"
 #include "openair2/LAYER2/RLC/rlc.h"
 
 #include "gtp_itf.h"
@@ -81,6 +82,9 @@ typedef struct Gtpv1uExtHeader {
 // TS 29.281, fig 5.2.1-3
 #define PDU_SESSION_CONTAINER (0x85)
 #define NR_RAN_CONTAINER (0x84)
+// TS 29.281 5.2.2.2 / 5.2.2.2A: PDCP SN of a forwarded DL SDU (HO data forwarding)
+#define LONG_PDCP_PDU_NUMBER (0x82)
+#define PDCP_PDU_NUMBER (0xc0)
 
 // TS 29.281, 5.2.1
 #define EXT_HDR_LNTH_OCTET_UNITS (4)
@@ -162,6 +166,7 @@ class gtpEndPoint {
 };
 
 static void gtpv1uReceiverCancel(pthread_t t);
+static gtpv1u_bearer_t create_bearer(int socket, const struct sockaddr_in *addr, uint32_t teid, uint16_t seq);
 class gtpEndPoints {
  public:
   pthread_mutex_t gtp_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -708,6 +713,60 @@ void GtpuSetDLForwardingTunnel(instance_t instance,
   pthread_mutex_unlock(&globGtp.gtp_lock);
 }
 
+bool GtpuForwardDlSduToFwdTunnel(instance_t instance,
+                                 ue_id_t ue_id,
+                                 int bearer_id,
+                                 uint32_t pdcp_sn,
+                                 bool long_sn,
+                                 int qfi,
+                                 uint8_t *buf,
+                                 size_t len)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  auto instChk = globGtp.instances.find(compatInst(instance));
+  if (instChk == globGtp.instances.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return false;
+  }
+  gtpEndPoint *inst = &instChk->second;
+  auto ptrUe = inst->ue2te_mapping.find(ue_id);
+  if (ptrUe == inst->ue2te_mapping.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return false;
+  }
+  auto ptr2 = ptrUe->second.bearers.find(bearer_id);
+  if (ptr2 == ptrUe->second.bearers.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return false;
+  }
+  auto it = globGtp.te2ue_mapping.find(ptr2->second.teid_incoming);
+  if (it == globGtp.te2ue_mapping.end() || it->second.dl_fwd_teid == 0) {
+    /* no DL forwarding tunnel armed: not a HO, nothing to do */
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return false;
+  }
+  teid_t fwd_teid = it->second.dl_fwd_teid;
+  struct sockaddr_storage fwd_addr = it->second.dl_fwd_addr;
+  int sock_fd = compatInst(instance);
+  pthread_mutex_unlock(&globGtp.gtp_lock);
+
+  gtpv1u_bearer_t fwd_bearer = create_bearer(sock_fd, (const struct sockaddr_in *)&fwd_addr, fwd_teid, 0);
+  gtpu_extension_header_t ext[2];
+  int ext_count = 0;
+  if (qfi != NO_QFI) {
+    ext[ext_count++] = (gtpu_extension_header_t){
+      .type = GTPU_EXT_UL_PDU_SESSION_INFORMATION,
+      .ul_pdu_session_information = {.qfi = qfi},
+    };
+  }
+  ext[ext_count++] = (gtpu_extension_header_t){
+    .type = long_sn ? GTPU_EXT_LONG_PDCP_PDU_NUMBER : GTPU_EXT_PDCP_PDU_NUMBER,
+    .pdcp_pdu_number = {.pdcp_pdu_number = pdcp_sn},
+  };
+  gtpv1uCreateAndSendMsg(&fwd_bearer, GTP_GPDU, buf, len, false, false, ext, ext_count);
+  return true;
+}
+
 teid_t newGtpuCreateTunnel(instance_t instance,
                            ue_id_t ue_id,
                            int incoming_bearer_id,
@@ -1191,6 +1250,9 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
   int8_t qfi = -1;
   bool rqi = false;
   uint32_t NR_PDCP_PDU_SN = 0;
+  /* PDCP SN of a DL SDU forwarded during Xn/N3 HO data forwarding, if present
+   * (TS 29.281 5.2.2.2 / 5.2.2.2A); -1 when this is not forwarded backlog */
+  int32_t fwd_pdcp_sn = -1;
 
   /* if E, S, or PN is set then there are 4 more bytes of header */
   if (msgHdr->E || msgHdr->S || msgHdr->PN)
@@ -1269,6 +1331,24 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
           }
           break;
         }
+        case PDCP_PDU_NUMBER: {
+          /* 29.281 5.2.2.2: 15-bit SN, bit 8 of octet 2 spare */
+          if (offset + 2 > msgBufLen) {
+            LOG_E(GTPU, "gtp-u received header is malformed, ignore gtp packet\n");
+            return GTPNOK;
+          }
+          fwd_pdcp_sn = ((msgBuf[offset + 1] & 0x7f) << 8) | msgBuf[offset + 2];
+          break;
+        }
+        case LONG_PDCP_PDU_NUMBER: {
+          /* 29.281 5.2.2.2A: 18-bit SN, bits 8..3 of octet 2 spare */
+          if (offset + 3 > msgBufLen) {
+            LOG_E(GTPU, "gtp-u received header is malformed, ignore gtp packet\n");
+            return GTPNOK;
+          }
+          fwd_pdcp_sn = ((msgBuf[offset + 1] & 0x03) << 16) | (msgBuf[offset + 2] << 8) | msgBuf[offset + 3];
+          break;
+        }
         default:
           LOG_W(GTPU, "unhandled extension 0x%2.2x, skipping\n", next_extension_header_type);
           break;
@@ -1298,11 +1378,23 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
   const uint32_t destinationL2Id = 0;
 
   if (sdu_buffer_size > 0) {
-    // TS 29.281 5.2.2.7 / TS 38.415 require a QFI (PDU Session Container) on every N3 G-PDU,
-    // so a DL PDU with no QFI (e.g. a UPF-generated Router Advertisement) is out-of-spec.
-    // We still forward it through SDAP, by following the TS 37.324 5.2.1, where defined that
-    // an unmapped QoS flow shall map the SDAP SDU to the default DRB.
-    if (uedata.callBackSDAP) {
+    if (fwd_pdcp_sn >= 0) {
+      /* Xn HO forwarded backlog SDU (TS 29.281 5.2.2.2/5.2.2.2A): it already
+       * carries its SDAP header, so inject straight into the target DRB's PDCP
+       * under its original PDCP SN instead of re-running SDAP (which would add
+       * a second SDAP header). */
+      if (!nr_pdcp_data_req_drb_with_sn(uedata.ue_id,
+                                        uedata.pdusession_id,
+                                        qfi != NO_QFI ? (uint8_t)qfi : 0,
+                                        (uint32_t)fwd_pdcp_sn,
+                                        sdu_buffer,
+                                        sdu_buffer_size))
+        LOG_E(GTPU, "[%d] failed to inject forwarded HO backlog SDU (sn %d)\n", h, fwd_pdcp_sn);
+    } else if (uedata.callBackSDAP) {
+      // TS 29.281 5.2.2.7 / TS 38.415 require a QFI (PDU Session Container) on every N3 G-PDU,
+      // so a DL PDU with no QFI (e.g. a UPF-generated Router Advertisement) is out-of-spec.
+      // We still forward it through SDAP, by following the TS 37.324 5.2.1, where defined that
+      // an unmapped QoS flow shall map the SDAP SDU to the default DRB.
       if (!uedata.callBackSDAP(&ctxt,
                                        uedata.ue_id,
                                        srb_flag,

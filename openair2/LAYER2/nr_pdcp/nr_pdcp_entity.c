@@ -15,6 +15,7 @@
 #include "nr_pdcp_sdu.h"
 
 #include "LOG/log.h"
+#include "utils.h"
 
 /**
  * @brief returns the maximum PDCP PDU size
@@ -24,6 +25,87 @@
 int nr_max_pdcp_pdu_size(sdu_size_t sdu_size)
 {
   return (sdu_size + LONG_PDCP_HEADER_SIZE + PDCP_INTEGRITY_SIZE);
+}
+
+nr_pdcp_shadow_ring_t *nr_pdcp_shadow_ring_new(void)
+{
+  return calloc_or_fail(1, sizeof(nr_pdcp_shadow_ring_t));
+}
+
+static void shadow_ring_pop_head(nr_pdcp_shadow_ring_t *ring)
+{
+  nr_pdcp_shadow_sdu_t *cur = ring->head;
+  ring->head = cur->next;
+  if (ring->head == NULL)
+    ring->tail = NULL;
+  ring->count--;
+  ring->byte_count -= cur->size;
+  free(cur);
+}
+
+void nr_pdcp_shadow_ring_push(nr_pdcp_shadow_ring_t *ring, const char *buffer, int size, uint32_t count, int qfi, uint64_t now)
+{
+  nr_pdcp_shadow_sdu_t *sdu = calloc_or_fail(1, sizeof(nr_pdcp_shadow_sdu_t) + size);
+  sdu->count = count;
+  sdu->qfi = qfi;
+  sdu->size = size;
+  sdu->t_arrival = now;
+  sdu->next = NULL;
+  memcpy(sdu->data, buffer, size);
+
+  if (ring->tail != NULL)
+    ring->tail->next = sdu;
+  else
+    ring->head = sdu;
+  ring->tail = sdu;
+  ring->count++;
+  ring->byte_count += size;
+
+  while (ring->head != NULL
+         && (ring->count > NR_PDCP_SHADOW_RING_CAP_COUNT || ring->byte_count > NR_PDCP_SHADOW_RING_CAP_BYTES)) {
+    shadow_ring_pop_head(ring);
+    ring->dropped_oldest++;
+  }
+}
+
+void nr_pdcp_shadow_ring_ack(nr_pdcp_shadow_ring_t *ring, uint32_t count)
+{
+  while (ring->head != NULL && ring->head->count <= count)
+    shadow_ring_pop_head(ring);
+}
+
+void nr_pdcp_shadow_ring_sweep_expired(nr_pdcp_shadow_ring_t *ring, uint64_t now, int discard_timer)
+{
+  if (discard_timer < 0)
+    return; /* infinity: never expires */
+  /* entries are pushed in arrival order, so t_arrival is monotonic along the
+   * list: evict expired ones from the head until the first still-valid entry */
+  while (ring->head != NULL && now >= ring->head->t_arrival
+         && (now - ring->head->t_arrival) >= (uint64_t)discard_timer) {
+    shadow_ring_pop_head(ring);
+    ring->dropped_expired++;
+  }
+}
+
+nr_pdcp_shadow_sdu_t *nr_pdcp_shadow_ring_drain(nr_pdcp_shadow_ring_t *ring)
+{
+  nr_pdcp_shadow_sdu_t *list = ring->head;
+  ring->head = NULL;
+  ring->tail = NULL;
+  ring->count = 0;
+  ring->byte_count = 0;
+  return list;
+}
+
+void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring)
+{
+  nr_pdcp_shadow_sdu_t *cur = ring->head;
+  while (cur != NULL) {
+    nr_pdcp_shadow_sdu_t *next = cur->next;
+    free(cur);
+    cur = next;
+  }
+  free(ring);
 }
 
 static void nr_pdcp_entity_recv_pdu(nr_pdcp_entity_t *entity,
@@ -203,14 +285,14 @@ static void nr_pdcp_entity_recv_pdu(nr_pdcp_entity_t *entity,
   }
 }
 
-static int nr_pdcp_entity_process_sdu(nr_pdcp_entity_t *entity,
-                                      char *buffer,
-                                      int size,
-                                      int sdu_id,
-                                      char *pdu_buffer,
-                                      int pdu_max_size)
+static int nr_pdcp_entity_process_sdu_common(nr_pdcp_entity_t *entity,
+                                             char *buffer,
+                                             int size,
+                                             uint32_t count,
+                                             char *pdu_buffer,
+                                             int pdu_max_size,
+                                             bool advance_tx_next)
 {
-  uint32_t count;
   int      sn;
   int      header_size;
   int      integrity_size;
@@ -230,9 +312,17 @@ static int nr_pdcp_entity_process_sdu(nr_pdcp_entity_t *entity,
   entity->stats.rxsdu_pkts++;
   entity->stats.rxsdu_bytes += size;
 
+  sn = count & entity->sn_max;
 
-  count = entity->tx_next;
-  sn = entity->tx_next & entity->sn_max;
+  /* only the local, auto-incrementing path shadows its own backlog: a
+   * COUNT-preserving injection (advance_tx_next == false) is itself a
+   * forwarded backlog SDU and must not be re-shadowed here */
+  if (advance_tx_next && entity->shadow_ring != NULL) {
+    int qfi = NR_PDCP_SHADOW_SDU_NO_QFI;
+    if (entity->has_sdap_tx && size >= 1)
+      qfi = (uint8_t)buffer[0] & 0x3F; // SDAP DL header, QFI is bits 0-5
+    nr_pdcp_shadow_ring_push(entity->shadow_ring, buffer, size, count, qfi, entity->t_current);
+  }
 
   if (entity->has_sdap_tx) sdap_header_size = 1; // SDAP header is one byte
 
@@ -283,13 +373,34 @@ static int nr_pdcp_entity_process_sdu(nr_pdcp_entity_t *entity,
                    entity->rb_id, count, entity->is_gnb ? 1 : 0);
   }
 
-  entity->tx_next++;
+  if (advance_tx_next)
+    entity->tx_next++;
 
   entity->stats.txpdu_pkts++;
   entity->stats.txpdu_bytes += header_size + size + integrity_size;
   entity->stats.txpdu_sn = sn;
 
   return header_size + size + integrity_size;
+}
+
+static int nr_pdcp_entity_process_sdu(nr_pdcp_entity_t *entity,
+                                      char *buffer,
+                                      int size,
+                                      int sdu_id,
+                                      char *pdu_buffer,
+                                      int pdu_max_size)
+{
+  return nr_pdcp_entity_process_sdu_common(entity, buffer, size, entity->tx_next, pdu_buffer, pdu_max_size, true);
+}
+
+int nr_pdcp_entity_process_sdu_with_count(nr_pdcp_entity_t *entity,
+                                          char *buffer,
+                                          int size,
+                                          uint32_t count,
+                                          char *pdu_buffer,
+                                          int pdu_max_size)
+{
+  return nr_pdcp_entity_process_sdu_common(entity, buffer, size, count, pdu_buffer, pdu_max_size, false);
 }
 
 static bool nr_pdcp_entity_check_integrity(nr_pdcp_entity_t *entity,
@@ -445,6 +556,11 @@ static void nr_pdcp_entity_set_time(nr_pdcp_entity_t *entity, uint64_t now)
 {
   entity->t_current = now;
 
+  /* continuously drop stale SDUs from the Xn HO forwarding shadow ring so it
+   * never holds data past its discardTimer (TS 38.323 5.3) */
+  if (entity->shadow_ring != NULL)
+    nr_pdcp_shadow_ring_sweep_expired(entity->shadow_ring, now, entity->discard_timer);
+
   check_t_reordering(entity);
 }
 
@@ -580,6 +696,8 @@ static void nr_pdcp_entity_delete(nr_pdcp_entity_t *entity)
     entity->free_security(entity->security_context);
   if (entity->free_integrity != NULL)
     entity->free_integrity(entity->integrity_context);
+  if (entity->shadow_ring != NULL)
+    nr_pdcp_shadow_ring_free(entity->shadow_ring);
   free(entity);
 }
 
@@ -700,11 +818,7 @@ nr_pdcp_entity_t *new_nr_pdcp_entity(
 {
   nr_pdcp_entity_t *ret;
 
-  ret = calloc(1, sizeof(nr_pdcp_entity_t));
-  if (ret == NULL) {
-    LOG_E(PDCP, "%s:%d:%s: out of memory\n", __FILE__, __LINE__, __FUNCTION__);
-    exit(1);
-  }
+  ret = calloc_or_fail(1, sizeof(nr_pdcp_entity_t));
 
   ret->type = type;
 
@@ -749,6 +863,9 @@ nr_pdcp_entity_t *new_nr_pdcp_entity(
   ret->window_size   = 1 << (sn_size - 1);
 
   ret->is_gnb = is_gnb;
+
+  if (is_gnb && type != NR_PDCP_SRB)
+    ret->shadow_ring = nr_pdcp_shadow_ring_new();
 
   nr_pdcp_entity_set_security(ret, security_parameters);
 

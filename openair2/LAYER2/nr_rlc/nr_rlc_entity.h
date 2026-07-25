@@ -140,6 +140,10 @@ nr_rlc_entity_t *new_nr_rlc_entity_um(int rx_maxsize,
                                       int tx_maxsize,
                                       void (*deliver_sdu)(void *deliver_sdu_data, nr_rlc_entity_t *entity, char *buf, int size),
                                       void *deliver_sdu_data,
+                                      void (*sdu_successful_delivery)(void *sdu_successful_delivery_data,
+                                                                      nr_rlc_entity_t *entity,
+                                                                      int sdu_id),
+                                      void *sdu_successful_delivery_data,
                                       int t_reassembly,
                                       int sn_field_length);
 

@@ -290,12 +290,14 @@ int test_main(void)
         case GNB_UM:
           gnb = new_nr_rlc_entity_um(test[pos+1], test[pos+2],
                                      deliver_sdu_gnb_um, NULL,
+                                     NULL, NULL,
                                      test[pos+3], test[pos+4]);
           pos += 5;
           break;
         case UE_UM:
           ue = new_nr_rlc_entity_um(test[pos+1], test[pos+2],
                                     deliver_sdu_ue_um, NULL,
+                                    NULL, NULL,
                                     test[pos+3], test[pos+4]);
           pos += 5;
           break;

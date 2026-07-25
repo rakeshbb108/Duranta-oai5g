@@ -39,6 +39,9 @@ bool sdap_data_req(protocol_ctxt_t *ctxt_p,
  */
 void sdap_data_ind(int drb_id, int is_gnb, int pdusession_id, ue_id_t ue_id, char *buf, int size);
 
+/* Resolve the DL DRB id a QFI maps to for this UE/PDU session (0 if none). */
+int nr_sdap_get_drb_from_qfi(ue_id_t ue_id, int pdusession_id, uint8_t qfi);
+
 void start_sdap_tun_gnb_first_ue_default_pdu_session(ue_id_t ue_id, int pdu_session_id);
 void create_ue_ip_if(const char *ipv4, const char *ipv6, int ue_id, int pdu_session_id, bool is_default);
 void create_ue_eth_if(int ue_id, int pdu_session_id, bool is_default);

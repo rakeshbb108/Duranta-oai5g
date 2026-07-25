@@ -950,12 +950,16 @@ bool nr_pdcp_data_req_drb(protocol_ctxt_t *ctxt_pP,
     nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
     return 0;
   }
+  /* the PDCP COUNT this SDU was just assigned, so RLC's delivery-confirmation
+   * callback can identify it precisely (muiP is otherwise unused/undefined
+   * for GTP-U-sourced DL data on this path) */
+  int count_used = (int)(rb->tx_next - 1);
 
   deliver_pdu deliver_pdu_cb = rb->deliver_pdu;
 
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
 
-  deliver_pdu_cb(NULL, ue_id, rb_id, pdu_buf, pdu_size, muiP);
+  deliver_pdu_cb(NULL, ue_id, rb_id, pdu_buf, pdu_size, count_used);
 
   return 1;
 }
@@ -1069,4 +1073,130 @@ void nr_pdcp_get_drb_count_values(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_count_t 
   *ul_count = entity->get_pdcp_count_ul(entity);
 
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief Mark a DL SDU (identified by its PDCP COUNT) as confirmed delivered,
+ *  pruning it (and anything older) from the Xn HO forwarding shadow ring. */
+void nr_pdcp_entity_ack_sdu(ue_id_t ue_id, rb_id_t rb_id, uint32_t count)
+{
+  /* No-op when PDCP isn't colocated in this process (e.g. split DU-only,
+   * where RLC's delivery callback still fires but PDCP lives in CU-UP). */
+  if (nr_pdcp_ue_manager == NULL)
+    return;
+
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  if (rb != NULL && rb->shadow_ring != NULL)
+    nr_pdcp_shadow_ring_ack(rb->shadow_ring, count);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief Target side of Xn HO DL data forwarding: inject a forwarded backlog
+ * SDU (which already carries its SDAP header) into the DRB's PDCP under its
+ * original PDCP SN, bypassing SDAP. The DRB is resolved from the QFI. */
+bool nr_pdcp_data_req_drb_with_sn(ue_id_t ue_id, int pdusession_id, uint8_t qfi, uint32_t pdcp_sn, const uint8_t *buf, int size)
+{
+  int drb_id = nr_sdap_get_drb_from_qfi(ue_id, pdusession_id, qfi);
+  if (drb_id <= 0) {
+    LOG_E(PDCP, "Xn HO fwd: no DRB for ue %ld pdu %d qfi %u\n", ue_id, pdusession_id, qfi);
+    return false;
+  }
+
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, drb_id, false);
+  if (rb == NULL) {
+    nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+    LOG_E(PDCP, "Xn HO fwd: DRB %d not found for ue %ld\n", drb_id, ue_id);
+    return false;
+  }
+
+  /* reconstruct the full COUNT from the wire PDCP SN using the same modulo
+   * window association PDCP uses on RX: forwarded backlog SNs sit just below
+   * tx_next, so an SN "ahead" of the reference belongs to the previous HFN */
+  int sn_ref = rb->tx_next & rb->sn_max;
+  uint32_t hfn = rb->tx_next >> rb->sn_size;
+  if ((int)(pdcp_sn & rb->sn_max) > sn_ref && hfn > 0)
+    hfn -= 1;
+  uint32_t count = (hfn << rb->sn_size) | (pdcp_sn & rb->sn_max);
+
+  int max_size = nr_max_pdcp_pdu_size(size);
+  char pdu_buf[max_size];
+  int pdu_size = nr_pdcp_entity_process_sdu_with_count(rb, (char *)buf, size, count, pdu_buf, max_size);
+  if (pdu_size == -1) {
+    nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+    return false;
+  }
+  deliver_pdu deliver_pdu_cb = rb->deliver_pdu;
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+
+  deliver_pdu_cb(NULL, ue_id, drb_id, pdu_buf, pdu_size, (int)count);
+  return true;
+}
+
+/** @brief Source side of Xn HO DL data forwarding: drain each DRB's shadow ring
+ * for the given PDU session and forward every buffered SDU to the target over
+ * the DL forwarding tunnel, tagged with its original PDCP SN (TS 29.281
+ * 5.2.2.2 / 5.2.2.2A). No-op if no forwarding tunnel is armed. */
+void nr_pdcp_drain_and_forward_pending_sdus(instance_t n3inst, ue_id_t ue_id, int pdusession_id)
+{
+  struct {
+    nr_pdcp_shadow_sdu_t *list;
+    int drb_id;
+    bool long_sn;
+    int discard_timer; /* ms, -1 = infinity */
+    uint64_t now; /* entity->t_current (ms) at drain */
+  } drained[MAX_DRBS_PER_UE];
+  int n_drained = 0;
+
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  if (ue != NULL) {
+    for (int i = 0; i < MAX_DRBS_PER_UE; i++) {
+      nr_pdcp_entity_t *drb = ue->drb[i];
+      if (drb == NULL || drb->pdusession_id != pdusession_id || drb->shadow_ring == NULL)
+        continue;
+      nr_pdcp_shadow_sdu_t *list = nr_pdcp_shadow_ring_drain(drb->shadow_ring);
+      if (list == NULL)
+        continue;
+      drained[n_drained].list = list;
+      drained[n_drained].drb_id = drb->rb_id;
+      drained[n_drained].long_sn = drb->sn_size == LONG_SN_SIZE;
+      drained[n_drained].discard_timer = drb->discard_timer;
+      drained[n_drained].now = drb->t_current;
+      n_drained++;
+    }
+  }
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+
+  /* forward outside the PDCP lock (GTP-U takes its own lock) */
+  int n_fwd = 0;
+  int n_expired = 0;
+  for (int d = 0; d < n_drained; d++) {
+    /* the wire carries the PDCP SN (12- or 18-bit), not the full COUNT */
+    uint32_t sn_mask = drained[d].long_sn ? ((1u << LONG_SN_SIZE) - 1) : ((1u << SHORT_SN_SIZE) - 1);
+    int discard_timer = drained[d].discard_timer;
+    uint64_t now = drained[d].now;
+    nr_pdcp_shadow_sdu_t *cur = drained[d].list;
+    while (cur != NULL) {
+      nr_pdcp_shadow_sdu_t *next = cur->next;
+      /* TS 38.323 5.3: do not forward an SDU whose discardTimer has expired */
+      if (discard_timer >= 0 && now >= cur->t_arrival && (now - cur->t_arrival) >= (uint64_t)discard_timer) {
+        n_expired++;
+      } else {
+        int fwd_qfi = cur->qfi >= 0 ? cur->qfi : 0;
+        /* bearer_id for the forwarding tunnel is the PDU session id */
+        if (GtpuForwardDlSduToFwdTunnel(n3inst, ue_id, pdusession_id, cur->count & sn_mask, drained[d].long_sn,
+                                        fwd_qfi, (uint8_t *)cur->data, cur->size))
+          n_fwd++;
+      }
+      free(cur);
+      cur = next;
+    }
+  }
+  if (n_fwd > 0 || n_expired > 0)
+    LOG_I(PDCP,
+          "Xn HO: forwarded %d buffered DL SDU(s) (%d dropped, discardTimer expired) for UE %ld PDU session %d\n",
+          n_fwd, n_expired, ue_id, pdusession_id);
 }

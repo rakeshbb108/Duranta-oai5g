@@ -560,6 +560,9 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
               req->gNB_cu_up_ue_id,
               req_pdu_mod->sessionId,
               req_pdu_mod->dl_fwd_tnl->teId);
+        /* forward the buffered-but-not-yet-transmitted DL backlog now, before
+         * fresh N3 arrivals start being forwarded on this same tunnel */
+        nr_pdcp_drain_and_forward_pending_sdus(n3inst, req->gNB_cu_up_ue_id, (int)req_pdu_mod->sessionId);
       }
     }
   }

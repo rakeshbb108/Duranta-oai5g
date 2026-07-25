@@ -132,6 +132,19 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
                                  in_addr_t fwdAddr,
                                  teid_t fwdTeid);
 
+  /** @brief Forward one buffered DL SDU to a UE's DL forwarding tunnel (Xn HO),
+   *  tagged with its original PDCP SN via the PDCP PDU Number extension header
+   *  (TS 29.281 5.2.2.2 short / 5.2.2.2A long, selected by long_sn). Returns
+   *  false (no-op) if no forwarding tunnel is armed for bearer_id. */
+  bool GtpuForwardDlSduToFwdTunnel(instance_t instance,
+                                   ue_id_t ue_id,
+                                   int bearer_id,
+                                   uint32_t pdcp_sn,
+                                   bool long_sn,
+                                   int qfi,
+                                   uint8_t *buf,
+                                   size_t len);
+
   int newGtpuDeleteOneTunnel(instance_t instance, ue_id_t ue_id, int rb_id);
   int newGtpuDeleteAllTunnels(instance_t instance, ue_id_t ue_id);
 
