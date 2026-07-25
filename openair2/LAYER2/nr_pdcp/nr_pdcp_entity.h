@@ -43,6 +43,42 @@ typedef struct {
   uint32_t hfn;
 } nr_pdcp_count_t;
 
+/* Bounded backlog of plaintext DL SDUs (with their original COUNT) kept on gNB
+ * DRB entities so they can be forwarded to the target, with SN preserved, on
+ * Xn HO instead of being silently dropped when RLC's tx queue is torn down.
+ * NULL for SRBs and UE-side entities. */
+#define NR_PDCP_SHADOW_RING_CAP_COUNT 2048
+#define NR_PDCP_SHADOW_RING_CAP_BYTES (4 * 1024 * 1024)
+#define NR_PDCP_SHADOW_SDU_NO_QFI (-1)
+
+typedef struct nr_pdcp_shadow_sdu_s {
+  uint32_t count; /* original PDCP COUNT this plaintext SDU was assigned */
+  int qfi; /* NR_PDCP_SHADOW_SDU_NO_QFI if absent */
+  int size;
+  uint64_t t_arrival; /* entity->t_current (ms) when captured, for discardTimer */
+  struct nr_pdcp_shadow_sdu_s *next;
+  char data[]; /* plaintext SDU bytes */
+} nr_pdcp_shadow_sdu_t;
+
+typedef struct nr_pdcp_shadow_ring_s {
+  nr_pdcp_shadow_sdu_t *head; /* oldest, evicted first when over cap */
+  nr_pdcp_shadow_sdu_t *tail; /* newest */
+  int count;
+  int byte_count;
+  uint32_t dropped_oldest;
+  uint32_t dropped_expired;
+} nr_pdcp_shadow_ring_t;
+
+nr_pdcp_shadow_ring_t *nr_pdcp_shadow_ring_new(void);
+void nr_pdcp_shadow_ring_push(nr_pdcp_shadow_ring_t *ring, const char *buffer, int size, uint32_t count, int qfi, uint64_t now);
+/* evicts count and everything older */
+void nr_pdcp_shadow_ring_ack(nr_pdcp_shadow_ring_t *ring, uint32_t count);
+/* evicts entries whose discardTimer has expired (TS 38.323 5.3); no-op if discard_timer < 0 (infinity) */
+void nr_pdcp_shadow_ring_sweep_expired(nr_pdcp_shadow_ring_t *ring, uint64_t now, int discard_timer);
+/* detaches and returns the whole pending list in ascending COUNT order (caller frees it), ring becomes empty */
+nr_pdcp_shadow_sdu_t *nr_pdcp_shadow_ring_drain(nr_pdcp_shadow_ring_t *ring);
+void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring);
+
 typedef struct {
   //nr_pdcp_entity_type_t mode;
   /* PDU stats */
@@ -177,7 +213,16 @@ typedef struct nr_pdcp_entity_s {
   void (*set_pdcp_count_dl)(struct nr_pdcp_entity_s *entity, nr_pdcp_count_t count, int sn_size);
   void (*set_pdcp_count_ul)(struct nr_pdcp_entity_s *entity, nr_pdcp_count_t count, int sn_size);
 
+  /* Xn HO DL data forwarding: backlog of not-yet-confirmed-delivered plaintext
+   * SDUs with their original COUNT. NULL except for gNB DRB entities. */
+  nr_pdcp_shadow_ring_t *shadow_ring;
+
 } nr_pdcp_entity_t;
+
+/* Sibling to entity->process_sdu() that writes/ciphers using an explicit COUNT
+ * instead of entity->tx_next, and does not advance tx_next. Used at the target
+ * to inject a forwarded backlog SDU under its original PDCP SN. */
+int nr_pdcp_entity_process_sdu_with_count(nr_pdcp_entity_t *entity, char *buffer, int size, uint32_t count, char *pdu_buffer, int pdu_max_size);
 
 nr_pdcp_entity_t *new_nr_pdcp_entity(
     nr_pdcp_entity_type_t type,

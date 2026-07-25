@@ -114,4 +114,10 @@ void nr_pdcp_count_update(ue_id_t ue_id,
 
 void nr_pdcp_get_drb_count_values(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_count_t *ul_count, nr_pdcp_count_t *dl_count);
 
+void nr_pdcp_entity_ack_sdu(ue_id_t ue_id, rb_id_t rb_id, uint32_t count);
+
+/* Xn HO DL data forwarding (TS 38.300 / 29.281 5.2.2.2, 5.2.2.2A) */
+bool nr_pdcp_data_req_drb_with_sn(ue_id_t ue_id, int pdusession_id, uint8_t qfi, uint32_t pdcp_sn, const uint8_t *buf, int size);
+void nr_pdcp_drain_and_forward_pending_sdus(instance_t n3inst, ue_id_t ue_id, int pdusession_id);
+
 #endif /* NR_PDCP_OAI_API_H */

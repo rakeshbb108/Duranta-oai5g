@@ -511,13 +511,19 @@ static int generate_tx_pdu(nr_rlc_entity_um_t *entity, char *buffer, int size)
   entity->common.stats.txpdu_pkts++;
   entity->common.stats.txpdu_bytes += size;
 
-  /* No need to 'zero' time-of-arrival; 
+  /* No need to 'zero' time-of-arrival;
   Segmented packets do need to be duplicated in time-sensitive use cases */
   if (entity->common.avg_time_is_on) {
     uint64_t time_now = time_average_now();
     uint64_t waited_time = time_now - sdu->sdu->time_of_arrival;
     time_average_add(entity->common.txsdu_avg_time_to_tx, time_now, waited_time);
   }
+
+  /* UM has no ARQ: "confirmed sent" is "fully handed off to MAC" */
+  if (sdu->is_last && entity->common.sdu_successful_delivery)
+    entity->common.sdu_successful_delivery(entity->common.sdu_successful_delivery_data,
+                                           (nr_rlc_entity_t *)entity,
+                                           sdu->sdu->upper_layer_id);
 
   nr_rlc_free_sdu_segment(sdu);
 
