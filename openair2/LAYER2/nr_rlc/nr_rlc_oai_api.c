@@ -544,13 +544,15 @@ rb_found:
         is_srb ? "SRB" : "DRB",
         rb_id);
 
-  /* TODO: do something for DRBs? */
-  if (is_srb == 0)
+  if (is_srb)
     return;
 
   int is_gnb = nr_rlc_manager_get_gnb_flag(nr_rlc_ue_manager);
   if (!is_gnb)
     return;
+
+  /* prune the PDCP shadow buffer used for Xn HO DL data forwarding */
+  nr_pdcp_entity_ack_sdu(ue->ue_id, rb_id, (uint32_t)sdu_id);
 
 #if 0
   msg = itti_alloc_new_message(TASK_RLC_ENB, RLC_SDU_INDICATION);
@@ -879,6 +881,7 @@ static void add_drb_um(int ue_id, int drb_id, const NR_RLC_BearerConfig_t *rlc_B
     nr_rlc_entity_t *nr_rlc_um = new_nr_rlc_entity_um(RLC_RX_MAXSIZE,
                                                       RLC_TX_MAXSIZE,
                                                       deliver_sdu, ue,
+                                                      successful_delivery, ue,
                                                       t_reassembly,
                                                       sn_field_length);
     nr_rlc_ue_add_drb_rlc_entity(ue, drb_id, nr_rlc_um);

@@ -40,6 +40,9 @@ bool sdap_data_req(protocol_ctxt_t *ctxt_p,
  */
 void sdap_data_ind(int drb_id, int is_gnb, int pdusession_id, ue_id_t ue_id, char *buf, int size);
 
+/* Resolve the DL DRB id a QFI maps to for this UE/PDU session (0 if none). */
+int nr_sdap_get_drb_from_qfi(ue_id_t ue_id, int pdusession_id, uint8_t qfi);
+
 void start_sdap_tun_gnb_first_ue_default_pdu_session(ue_id_t ue_id, int pdu_session_id);
 void nr_sdap_generate_gnb_tun_ifname(char *ifname, ue_id_t ue_id);
 void nr_sdap_tun_bind(struct nr_sdap_entity_s *entity, int sock, int qfi);
