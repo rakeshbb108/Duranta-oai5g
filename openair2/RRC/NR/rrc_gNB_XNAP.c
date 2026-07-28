@@ -419,6 +419,24 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
     }
   }
 
+  /* Send the HO Command (RRCReconfiguration) to the UE FIRST. This triggers the
+   * source DU to stop DL transmission to the UE (TransmissionActionIndicator
+   * Stop). Only after that do we arm the forwarding tunnel and drain the DL
+   * backlog (below), so we forward only genuinely-untransmitted SDUs and
+   * minimise duplication with what the source already put on the air (#6). */
+  byte_array_t buffer = doRRCReconfiguration_from_HandoverCommand(msg->target2source);
+  if (!buffer.buf || buffer.len == 0) {
+    LOG_E(NR_RRC, "UE %d: failed to decode HandoverCommand from Xn HO Request Ack\n", UE->rrc_ue_id);
+    free_byte_array(buffer);
+    return;
+  }
+
+  rrc_gNB_trigger_reconfiguration_for_handover(rrc, UE, buffer.buf, buffer.len);
+  LOG_A(NR_RRC, "Xn HO: sent RRCReconfiguration (HO Command) to UE %u/RNTI %04x\n",
+        UE->rrc_ue_id, UE->rnti);
+  free_byte_array(buffer);
+
+  /* Now arm the DL forwarding tunnel(s) and drain the backlog to the target. */
   if (ue_associated_to_cuup(UE) && msg->num_pdu_admitted > 0) {
     pdu_session_to_mod_t *fwd_sessions = calloc_or_fail(msg->num_pdu_admitted, sizeof(*fwd_sessions));
     int num_fwd = 0;
@@ -440,25 +458,13 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
         .numPDUSessionsMod = num_fwd,
         .pduSessionMod = fwd_sessions,
       };
-      sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE); 
+      sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
       rrc->cucp_cuup.bearer_context_mod(assoc_id, &e1_req);
     }
     for (int i = 0; i < num_fwd; i++)
       free(fwd_sessions[i].dl_fwd_tnl);
     free(fwd_sessions);
   }
-
-  byte_array_t buffer = doRRCReconfiguration_from_HandoverCommand(msg->target2source);
-  if (!buffer.buf || buffer.len == 0) {
-    LOG_E(NR_RRC, "UE %d: failed to decode HandoverCommand from Xn HO Request Ack\n", UE->rrc_ue_id);
-    free_byte_array(buffer);
-    return;
-  }
-
-  rrc_gNB_trigger_reconfiguration_for_handover(rrc, UE, buffer.buf, buffer.len);
-  LOG_A(NR_RRC, "Xn HO: sent RRCReconfiguration (HO Command) to UE %u/RNTI %04x\n",
-        UE->rrc_ue_id, UE->rnti);
-  free_byte_array(buffer);
 }
 
 /** @brief Send SN Status Transfer (TS 38.423 §9.1.1.4) from source to target via Xn.

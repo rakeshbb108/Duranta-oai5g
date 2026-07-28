@@ -864,7 +864,12 @@ nr_pdcp_entity_t *new_nr_pdcp_entity(
 
   ret->is_gnb = is_gnb;
 
-  if (is_gnb && type != NR_PDCP_SRB)
+  /* Xn HO DL data forwarding with preserved PDCP SN is defined only for RLC-AM
+   * DRBs (TS 38.300: PDCP SN status preservation applies for RLC AM). Only AM
+   * DRB entities get a shadow ring. NOTE: nr_pdcp_add_drb() currently always
+   * creates DRB entities as NR_PDCP_DRB_AM; when the entity type is derived
+   * from the actual RLC mode, RLC-UM DRBs will be correctly excluded here. */
+  if (is_gnb && type == NR_PDCP_DRB_AM)
     ret->shadow_ring = nr_pdcp_shadow_ring_new();
 
   nr_pdcp_entity_set_security(ret, security_parameters);
