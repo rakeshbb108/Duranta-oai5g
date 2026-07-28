@@ -331,7 +331,6 @@ static pdu_session_to_setup_t fill_e1_pdusession_to_setup(const pdusession_t *se
   char ip_str[INET_ADDRSTRLEN] = {0};
   inet_ntop(AF_INET, n3_incoming->addr.buffer, ip_str, sizeof(ip_str));
   LOG_I(NR_RRC, "PDU Session to Setup: PDU Session ID=%d, incoming TEID=0x%08x, Addr=%s\n", session->pdusession_id, n3_incoming->teid, ip_str);
-  pdu.dl_fwd_tnl_req = session->dl_forwarding_proposed;
   return pdu;
 }
 
@@ -343,6 +342,8 @@ static DRB_nGRAN_to_setup_t fill_e1_drb_to_setup(const drb_t *rrc_drb,
 {
   DRB_nGRAN_to_setup_t drb_ngran = {0};
   drb_ngran.id = rrc_drb->drb_id;
+  // Xn HO: request a per-DRB DL forwarding tunnel when the source proposed forwarding
+  drb_ngran.dl_fwd_tnl_req = session->dl_forwarding_proposed;
 
   drb_ngran.sdap_config.defaultDRB = (session->sdap_config.default_drb == drb_ngran.id);
   drb_ngran.sdap_config.sDAP_Header_UL = !session->sdap_config.header_ul_absent;
