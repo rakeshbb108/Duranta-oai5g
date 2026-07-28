@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "LOG/log.h"
+#include "nr_pdcp_oai_api.h"
 
 static pthread_mutex_t   timer_thread_mutex   = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t    timer_thread_cond    = PTHREAD_COND_INITIALIZER;
@@ -48,6 +49,10 @@ static void *nr_pdcp_timer_thread(void *_nr_pdcp_ue_manager)
     }
 
     nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+
+    /* service any pending Xn HO forwarding re-drains (TS 38.425 flow-control
+     * resume). Done outside the manager lock — the drain re-acquires it. */
+    nr_pdcp_service_redrain_queue();
   }
 
   return NULL;
