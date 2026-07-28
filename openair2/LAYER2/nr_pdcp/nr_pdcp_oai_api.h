@@ -120,4 +120,12 @@ void nr_pdcp_entity_ack_sdu(ue_id_t ue_id, rb_id_t rb_id, uint32_t count);
 bool nr_pdcp_data_req_drb_with_sn(ue_id_t ue_id, int pdusession_id, uint8_t qfi, uint32_t pdcp_sn, const uint8_t *buf, int size);
 void nr_pdcp_drain_and_forward_pending_sdus(instance_t n3inst, ue_id_t ue_id, int pdusession_id);
 
+/* TS 38.425 DDDS flow control (Xn HO) */
+int nr_pdcp_get_highest_tx_sn(ue_id_t ue_id, rb_id_t rb_id);
+int nr_pdcp_get_highest_delivered_sn(ue_id_t ue_id, rb_id_t rb_id);
+/* enqueue a deferred re-drain (called from the GTP-U RX thread when a DDDS lifts credit) */
+void nr_pdcp_schedule_redrain(instance_t n3inst, ue_id_t ue_id, int pdusession_id);
+/* service pending re-drains (called from the PDCP timer thread, outside the manager lock) */
+void nr_pdcp_service_redrain_queue(void);
+
 #endif /* NR_PDCP_OAI_API_H */

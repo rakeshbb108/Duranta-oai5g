@@ -97,6 +97,34 @@ nr_pdcp_shadow_sdu_t *nr_pdcp_shadow_ring_drain(nr_pdcp_shadow_ring_t *ring)
   return list;
 }
 
+void nr_pdcp_shadow_ring_requeue_front(nr_pdcp_shadow_ring_t *ring, nr_pdcp_shadow_sdu_t *list)
+{
+  if (list == NULL)
+    return;
+  /* find tail of the list being requeued and count its entries/bytes */
+  nr_pdcp_shadow_sdu_t *tail = list;
+  int n = 1;
+  int bytes = list->size;
+  while (tail->next != NULL) {
+    tail = tail->next;
+    n++;
+    bytes += tail->size;
+  }
+  /* prepend before the current head (the requeued SDUs have lower COUNT) */
+  tail->next = ring->head;
+  ring->head = list;
+  if (ring->tail == NULL)
+    ring->tail = tail;
+  ring->count += n;
+  ring->byte_count += bytes;
+  /* enforce caps (evict newest-at-tail would break order; evict oldest head) */
+  while (ring->head != NULL
+         && (ring->count > NR_PDCP_SHADOW_RING_CAP_COUNT || ring->byte_count > NR_PDCP_SHADOW_RING_CAP_BYTES)) {
+    shadow_ring_pop_head(ring);
+    ring->dropped_oldest++;
+  }
+}
+
 void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring)
 {
   nr_pdcp_shadow_sdu_t *cur = ring->head;

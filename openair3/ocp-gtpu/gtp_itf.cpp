@@ -25,6 +25,7 @@ extern "C" {
 #include "openair2/LAYER2/nr_rlc/nr_rlc_oai_api.h"
 #include "openair2/LAYER2/nr_pdcp/nr_pdcp_oai_api.h"
 #include "openair2/LAYER2/RLC/rlc.h"
+#include "openair2/F1AP/f1ap_ids.h"
 
 #include "gtp_itf.h"
 #include "gtpu_extensions.h"
@@ -141,6 +142,25 @@ typedef struct {
    *  forwarded to target CU-UP at dl_fwd_addr:dl_fwd_teid in addition to normal delivery */
   teid_t dl_fwd_teid;
   struct sockaddr_storage dl_fwd_addr;
+
+  /* --- TS 38.425 NR-U DL DATA DELIVERY STATUS (DDDS) flow control (Xn HO) --- */
+  /* SOURCE side: byte credit advertised by the target's DDDS. The source may
+   * forward up to fwd_credit_bytes beyond the highest delivered/transmitted SN;
+   * fwd_stopped is set when the target advertised a desired buffer size of 0.
+   * Touched only under globGtp.gtp_lock. */
+  int64_t fwd_credit_bytes;
+  bool fwd_stopped;
+  bool fwd_credit_valid; /* a DDDS has been received (credit is meaningful) */
+  /* TARGET side: reverse channel to send DDDS back to the source. ddds_teid is
+   * the source's return TEID; ddds_addr is learned from the recvfrom of the
+   * first forwarded packet. ddds_teid != 0 marks this as a HO forwarding-receive
+   * tunnel (DDDS reporting is enabled). */
+  teid_t ddds_teid;
+  struct sockaddr_storage ddds_addr;
+  bool ddds_addr_valid;
+  uint32_t ddds_rx_since_report;   /* forwarded PDUs since last DDDS emitted */
+  uint32_t ddds_last_adv_bufsize;  /* last advertised desired buffer size */
+  uint64_t ddds_last_report_ms;    /* time of last DDDS emission (ms) */
 } ueidData_t;
 
 typedef struct {
@@ -467,16 +487,18 @@ void gtpv1uSendDirectWithNRUSeqNum(instance_t instance,
   _gtpv1uSendDirect(instance, ue_id, bearer_id, NO_QFI, buf, len, false, false, nru_seqnum);
 }
 
-static void fillDlDeliveryStatusReport(gtpu_extension_header_t *ext,
-                                       uint32_t RLC_buffer_availability,
-                                       uint32_t nr_pdcp_pdu_sn)
+/* Build a DL DATA DELIVERY STATUS extension. highest_tx_sn / highest_delivered_sn
+ * < 0 mean "not present" (indicator cleared). */
+static void fillDlDeliveryStatusReport(gtpu_extension_header_t *ext, uint32_t desired_buffer_size, int highest_tx_sn, int highest_delivered_sn)
 {
   *ext = {
     .type = GTPU_EXT_DL_DATA_DELIVERY_STATUS,
     .dl_data_delivery_status = {
-      .desired_buffer_size = RLC_buffer_availability,
-      .highest_transmitted_nr_pdcp_sn_present = true,
-      .highest_transmitted_nr_pdcp_sn = nr_pdcp_pdu_sn,
+      .desired_buffer_size = desired_buffer_size,
+      .highest_delivered_nr_pdcp_sn_present = highest_delivered_sn >= 0,
+      .highest_delivered_nr_pdcp_sn = highest_delivered_sn >= 0 ? (uint32_t)highest_delivered_sn : 0,
+      .highest_transmitted_nr_pdcp_sn_present = highest_tx_sn >= 0,
+      .highest_transmitted_nr_pdcp_sn = highest_tx_sn >= 0 ? (uint32_t)highest_tx_sn : 0,
     }
   };
 }
@@ -713,10 +735,72 @@ void GtpuSetDLForwardingTunnel(instance_t instance,
   pthread_mutex_unlock(&globGtp.gtp_lock);
 }
 
+/* TS 38.425 flow control (Xn HO), TARGET side: record the source's DDDS return
+ * TEID on this UE's forwarding-receive tunnel entry so the RX path can send DL
+ * DATA DELIVERY STATUS frames back to the source. The source address is learned
+ * lazily from the recvfrom of the first forwarded packet. returnTeid == 0
+ * disables DDDS reporting for this tunnel. */
+void GtpuSetDDDSReturnTunnel(instance_t instance, ue_id_t ue_id, int bearer_id, teid_t returnTeid)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  getInstRetVoid(compatInst(instance));
+  getUeRetVoid(inst, ue_id);
+  auto ptr2 = ptrUe->second.bearers.find(bearer_id);
+  if (ptr2 == ptrUe->second.bearers.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return;
+  }
+  auto it = globGtp.te2ue_mapping.find(ptr2->second.teid_incoming);
+  if (it == globGtp.te2ue_mapping.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return;
+  }
+  it->second.ddds_teid = returnTeid;
+  it->second.ddds_addr_valid = false; /* addr filled from recvfrom on first RX */
+  LOG_I(GTPU, "[%ld] UE %lu bearer %d: DDDS return TEID 0x%x armed\n", instance, ue_id, bearer_id, returnTeid);
+  pthread_mutex_unlock(&globGtp.gtp_lock);
+}
+
+/* TS 38.425 flow control (Xn HO), SOURCE side: apply a DDDS received from the
+ * target. Updates the byte credit on the source's forwarding tunnel entry
+ * (the one GtpuForwardDlSduToFwdTunnel throttles on). Returns true when the
+ * credit transitioned from exhausted (<=0 or stopped) to available, so the
+ * caller can kick a re-drain of any backlog held in the PDCP shadow ring. */
+static bool gtpu_apply_ddds(instance_t instance, ue_id_t ue_id, int bearer_id, uint32_t desired_buffer_size)
+{
+  bool credit_lifted = false;
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  auto instChk = globGtp.instances.find(compatInst(instance));
+  if (instChk == globGtp.instances.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return false;
+  }
+  auto ptrUe = instChk->second.ue2te_mapping.find(ue_id);
+  if (ptrUe == instChk->second.ue2te_mapping.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return false;
+  }
+  auto ptr2 = ptrUe->second.bearers.find(bearer_id);
+  if (ptr2 == ptrUe->second.bearers.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return false;
+  }
+  auto it = globGtp.te2ue_mapping.find(ptr2->second.teid_incoming);
+  if (it != globGtp.te2ue_mapping.end()) {
+    bool was_exhausted = !it->second.fwd_credit_valid || it->second.fwd_stopped || it->second.fwd_credit_bytes <= 0;
+    it->second.fwd_credit_valid = true;
+    it->second.fwd_credit_bytes = (int64_t)desired_buffer_size;
+    it->second.fwd_stopped = (desired_buffer_size == 0);
+    credit_lifted = was_exhausted && desired_buffer_size > 0;
+  }
+  pthread_mutex_unlock(&globGtp.gtp_lock);
+  return credit_lifted;
+}
+
 bool GtpuForwardDlSduToFwdTunnel(instance_t instance,
                                  ue_id_t ue_id,
                                  int bearer_id,
-                                 uint32_t pdcp_sn,
+                                 int64_t pdcp_sn,
                                  bool long_sn,
                                  int qfi,
                                  uint8_t *buf,
@@ -745,6 +829,18 @@ bool GtpuForwardDlSduToFwdTunnel(instance_t instance,
     pthread_mutex_unlock(&globGtp.gtp_lock);
     return false;
   }
+  /* TS 38.425 flow control: once a DDDS has set a credit window, do not forward
+   * beyond it. When the target advertised buffer size 0 (fwd_stopped) or the
+   * remaining credit is smaller than this SDU, refuse — the caller decides
+   * whether to drop (fresh N3) or requeue (drain). Before any DDDS is received
+   * (fwd_credit_valid == false) we forward unthrottled, as today. */
+  if (it->second.fwd_credit_valid) {
+    if (it->second.fwd_stopped || it->second.fwd_credit_bytes < (int64_t)len) {
+      pthread_mutex_unlock(&globGtp.gtp_lock);
+      return false;
+    }
+    it->second.fwd_credit_bytes -= (int64_t)len;
+  }
   teid_t fwd_teid = it->second.dl_fwd_teid;
   struct sockaddr_storage fwd_addr = it->second.dl_fwd_addr;
   int sock_fd = compatInst(instance);
@@ -759,10 +855,14 @@ bool GtpuForwardDlSduToFwdTunnel(instance_t instance,
       .ul_pdu_session_information = {.qfi = qfi},
     };
   }
-  ext[ext_count++] = (gtpu_extension_header_t){
-    .type = long_sn ? GTPU_EXT_LONG_PDCP_PDU_NUMBER : GTPU_EXT_PDCP_PDU_NUMBER,
-    .pdcp_pdu_number = {.pdcp_pdu_number = pdcp_sn},
-  };
+  /* pdcp_sn < 0 => fresh data forwarded without an SN (no PDCP PDU Number ext);
+   * pdcp_sn >= 0 => buffered backlog SDU tagged with its original PDCP SN. */
+  if (pdcp_sn >= 0) {
+    ext[ext_count++] = (gtpu_extension_header_t){
+      .type = long_sn ? GTPU_EXT_LONG_PDCP_PDU_NUMBER : GTPU_EXT_PDCP_PDU_NUMBER,
+      .pdcp_pdu_number = {.pdcp_pdu_number = (uint32_t)pdcp_sn},
+    };
+  }
   gtpv1uCreateAndSendMsg(&fwd_bearer, GTP_GPDU, buf, len, false, false, ext, ext_count);
   return true;
 }
@@ -1253,6 +1353,9 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
   /* PDCP SN of a DL SDU forwarded during Xn/N3 HO data forwarding, if present
    * (TS 29.281 5.2.2.2 / 5.2.2.2A); -1 when this is not forwarded backlog */
   int32_t fwd_pdcp_sn = -1;
+  /* TS 38.425 DL DATA DELIVERY STATUS received from the target (source side);
+   * >= 0 carries the advertised desired buffer size (flow-control credit) */
+  int64_t ddds_desired_bufsize = -1;
 
   /* if E, S, or PN is set then there are 4 more bytes of header */
   if (msgHdr->E || msgHdr->S || msgHdr->PN)
@@ -1326,6 +1429,9 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
                   uedata.incoming_rb_id,
                   ddds.desired_buffer_size,
                   ddds.highest_transmitted_nr_pdcp_sn_present ? ddds.highest_transmitted_nr_pdcp_sn : 0u);
+            /* TS 38.425 flow control (Xn HO source side): apply the advertised
+             * credit once the RX loop finishes parsing this GTP-U header. */
+            ddds_desired_bufsize = (int64_t)ddds.desired_buffer_size;
           } else {
             LOG_W(GTPU, "NR-RAN container type: %d not supported \n", PDU_type);
           }
@@ -1361,6 +1467,20 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
       }
       next_extension_header_type = msgBuf[offset - 1];
     }
+  }
+
+  /* TS 38.425 DL DATA DELIVERY STATUS received (source side): a DDDS frame
+   * carries no T-PDU payload. Apply the advertised credit to this UE's
+   * forwarding tunnel and, if the credit lifted from exhausted to available,
+   * kick a re-drain of any backlog held in the PDCP shadow ring (deferred to
+   * the PDCP task; never run the drain on this GTP-U RX thread). */
+  if (ddds_desired_bufsize >= 0) {
+    bool lifted = gtpu_apply_ddds(h, uedata.ue_id, uedata.pdusession_id, (uint32_t)ddds_desired_bufsize);
+    if (lifted)
+      nr_pdcp_schedule_redrain(h, uedata.ue_id, uedata.pdusession_id);
+    LOG_D(GTPU, "[%d] UE %lu PDU session %d: DDDS desired_buffer_size=%ld%s\n",
+          h, uedata.ue_id, uedata.pdusession_id, (long)ddds_desired_bufsize, lifted ? " (resume)" : "");
+    return !GTPNOK;
   }
 
   // This context is not good for gtp
@@ -1422,24 +1542,64 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
         LOG_E(GTPU, "[%d] down layer refused incoming packet\n", h);
     }
 
-    /* Xn HO DL data forwarding: re-encapsulate and send to target CU-UP (TS 38.424/38.425) */
-    if (uedata.dl_fwd_teid != 0) {
-      gtpv1u_bearer_t fwd_bearer = create_bearer(h, (const struct sockaddr_in *)&uedata.dl_fwd_addr, uedata.dl_fwd_teid, 0);
-      /* Re-attach the PDU Session Container so the target can route via SDAP/QFI
-       * instead of falling back to the (meaningless, for this tunnel) incoming_rb_id. */
-      gtpu_extension_header_t fwd_ext;
-      int fwd_ext_count = 0;
-      if (qfi != NO_QFI) {
-        fwd_ext = (gtpu_extension_header_t){
-          .type = GTPU_EXT_UL_PDU_SESSION_INFORMATION,
-          .ul_pdu_session_information = {.qfi = qfi},
-        };
-        fwd_ext_count = 1;
+    /* Xn HO DL data forwarding: re-encapsulate this fresh N3 packet and send to
+     * the target CU-UP (TS 38.424/38.425). Routed through the shared helper so
+     * the TS 38.425 flow-control credit gate covers both the fresh-N3 path and
+     * the shadow-ring drain path. pdcp_sn < 0 => forwarded without an SN. No-op
+     * when no forwarding tunnel is armed. */
+    if (uedata.dl_fwd_teid != 0)
+      GtpuForwardDlSduToFwdTunnel(h, uedata.ue_id, uedata.pdusession_id, -1, false, qfi, (uint8_t *)sdu_buffer, sdu_buffer_size);
+  }
+
+  /* TS 38.425 DL DATA DELIVERY STATUS (Xn HO target side): when this is a
+   * forwarding-receive tunnel with the DDDS return channel armed, advertise our
+   * RLC tx headroom (desired buffer size) plus the highest transmitted/delivered
+   * PDCP SN back to the source, so the source can flow-control its forwarding.
+   * Dormant until GtpuSetDDDSReturnTunnel() arms ddds_teid. */
+  if (uedata.ddds_teid != 0 && sdu_buffer_size > 0) {
+    int lcid = uedata.incoming_rb_id + 3; /* DRB lcid = drb_id + 3 */
+    /* RLC (DU-side) is keyed by RNTI, not by the CU UE ID uedata.ue_id carries
+     * for the PDCP calls below — translate via the F1 UE-ID table. */
+    rnti_t rnti = cu_get_f1_ue_data(uedata.ue_id).secondary_ue;
+    int rlc_space = nr_rlc_get_available_tx_space(rnti, lcid);
+    uint32_t dbs = rlc_space > 0 ? (uint32_t)rlc_space : 0;
+    bool emit = false;
+    teid_t ret_teid = 0;
+    struct sockaddr_storage ret_addr;
+
+    pthread_mutex_lock(&globGtp.gtp_lock);
+    auto pe = globGtp.te2ue_mapping.find(ntohl(msgHdr->teid));
+    if (pe != globGtp.te2ue_mapping.end() && pe->second.ddds_teid != 0) {
+      if (!pe->second.ddds_addr_valid) {
+        memcpy(&pe->second.ddds_addr, addr, sizeof(*addr));
+        ((struct sockaddr_in *)&pe->second.ddds_addr)->sin_port = htons(2152);
+        pe->second.ddds_addr_valid = true;
       }
-      gtpv1uCreateAndSendMsg(&fwd_bearer, GTP_GPDU, (uint8_t *)sdu_buffer, sdu_buffer_size, false, false,
-                             fwd_ext_count ? &fwd_ext : NULL, fwd_ext_count);
-      LOG_D(GTPU, "[%d] UE %lu PDU session %d: forwarded %d bytes to DL fwd TEID 0x%x\n",
-            h, uedata.ue_id, uedata.pdusession_id, sdu_buffer_size, uedata.dl_fwd_teid);
+      pe->second.ddds_rx_since_report++;
+      uint32_t last = pe->second.ddds_last_adv_bufsize;
+      /* watermark: buffer dropped below 25% of last advertised, or recovered
+       * from a previous stop (0 -> >0) */
+      bool watermark = (dbs < last / 4) || (last == 0 && dbs > 0);
+      if (pe->second.ddds_rx_since_report >= 16 || watermark) {
+        emit = true;
+        pe->second.ddds_rx_since_report = 0;
+        pe->second.ddds_last_adv_bufsize = dbs;
+        ret_teid = pe->second.ddds_teid;
+        ret_addr = pe->second.ddds_addr;
+      }
+    }
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+
+    if (emit) {
+      /* SN getters take the PDCP lock -> call outside gtp_lock */
+      int htx = nr_pdcp_get_highest_tx_sn(uedata.ue_id, uedata.incoming_rb_id);
+      int hdl = nr_pdcp_get_highest_delivered_sn(uedata.ue_id, uedata.incoming_rb_id);
+      gtpu_extension_header_t ext;
+      fillDlDeliveryStatusReport(&ext, dbs, htx, hdl);
+      gtpv1u_bearer_t bearer = create_bearer(h, (const struct sockaddr_in *)&ret_addr, ret_teid, 0);
+      gtpv1uCreateAndSendMsg(&bearer, GTP_GPDU, NULL, 0, false, false, &ext, 1);
+      LOG_D(GTPU, "[%d] UE %lu: sent DDDS desired_buffer_size=%u htx=%d hdl=%d to TEID 0x%x\n",
+            h, uedata.ue_id, dbs, htx, hdl, ret_teid);
     }
   }
 
@@ -1457,7 +1617,7 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
           rlc_tx_buffer_space,
           teid);
     gtpu_extension_header_t ext;
-    fillDlDeliveryStatusReport(&ext, rlc_tx_buffer_space, NR_PDCP_PDU_SN);
+    fillDlDeliveryStatusReport(&ext, rlc_tx_buffer_space, (int)NR_PDCP_PDU_SN, -1);
     gtpv1u_bearer_t bearer = create_bearer(h, addr, teid, 0);
     gtpv1uCreateAndSendMsg(&bearer,
                            GTP_GPDU,

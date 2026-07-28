@@ -1087,9 +1087,103 @@ void nr_pdcp_entity_ack_sdu(ue_id_t ue_id, rb_id_t rb_id, uint32_t count)
   nr_pdcp_manager_lock(nr_pdcp_ue_manager);
   nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
   nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
-  if (rb != NULL && rb->shadow_ring != NULL)
-    nr_pdcp_shadow_ring_ack(rb->shadow_ring, count);
+  if (rb != NULL) {
+    if (rb->shadow_ring != NULL)
+      nr_pdcp_shadow_ring_ack(rb->shadow_ring, count);
+    /* track highest delivered DL COUNT for TS 38.425 DDDS reporting */
+    if (!rb->has_delivered_count || count >= rb->highest_delivered_count) {
+      rb->highest_delivered_count = count;
+      rb->has_delivered_count = true;
+    }
+  }
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief Highest transmitted DL PDCP SN for a DRB (tx_next-1 masked), or -1 if
+ *  nothing transmitted yet. For TS 38.425 DDDS reporting (target side). */
+int nr_pdcp_get_highest_tx_sn(ue_id_t ue_id, rb_id_t rb_id)
+{
+  if (nr_pdcp_ue_manager == NULL)
+    return -1;
+  int sn = -1;
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  if (rb != NULL && rb->tx_next != 0)
+    sn = (int)((rb->tx_next - 1) & rb->sn_max);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+  return sn;
+}
+
+/** @brief Highest delivered DL PDCP SN for a DRB (RLC AM), or -1 if none. */
+int nr_pdcp_get_highest_delivered_sn(ue_id_t ue_id, rb_id_t rb_id)
+{
+  if (nr_pdcp_ue_manager == NULL)
+    return -1;
+  int sn = -1;
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  if (rb != NULL && rb->has_delivered_count)
+    sn = (int)(rb->highest_delivered_count & rb->sn_max);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+  return sn;
+}
+
+/* --- Xn HO forwarding re-drain queue (TS 38.425 flow-control resume) --------
+ * A DDDS arriving on the GTP-U RX thread that lifts flow-control credit must
+ * re-drain the shadow ring, but the drain takes nr_pdcp_manager_lock and must
+ * not run on the GTP-U RX thread (lock-order). We defer it: the RX thread
+ * enqueues a request and the PDCP timer thread services it. */
+typedef struct {
+  instance_t n3inst;
+  ue_id_t ue_id;
+  int pdusession_id;
+} nr_pdcp_redrain_req_t;
+#define NR_PDCP_REDRAIN_Q_SIZE 64
+static nr_pdcp_redrain_req_t nr_pdcp_redrain_q[NR_PDCP_REDRAIN_Q_SIZE];
+static int nr_pdcp_redrain_q_head;
+static int nr_pdcp_redrain_q_len;
+static pthread_mutex_t nr_pdcp_redrain_q_m = PTHREAD_MUTEX_INITIALIZER;
+
+void nr_pdcp_schedule_redrain(instance_t n3inst, ue_id_t ue_id, int pdusession_id)
+{
+  pthread_mutex_lock(&nr_pdcp_redrain_q_m);
+  /* coalesce: skip if an identical request is already pending */
+  bool dup = false;
+  for (int i = 0; i < nr_pdcp_redrain_q_len; i++) {
+    const nr_pdcp_redrain_req_t *r = &nr_pdcp_redrain_q[(nr_pdcp_redrain_q_head + i) % NR_PDCP_REDRAIN_Q_SIZE];
+    if (r->ue_id == ue_id && r->pdusession_id == pdusession_id) {
+      dup = true;
+      break;
+    }
+  }
+  if (!dup && nr_pdcp_redrain_q_len < NR_PDCP_REDRAIN_Q_SIZE) {
+    int i = (nr_pdcp_redrain_q_head + nr_pdcp_redrain_q_len) % NR_PDCP_REDRAIN_Q_SIZE;
+    nr_pdcp_redrain_q[i].n3inst = n3inst;
+    nr_pdcp_redrain_q[i].ue_id = ue_id;
+    nr_pdcp_redrain_q[i].pdusession_id = pdusession_id;
+    nr_pdcp_redrain_q_len++;
+  }
+  pthread_mutex_unlock(&nr_pdcp_redrain_q_m);
+}
+
+void nr_pdcp_service_redrain_queue(void)
+{
+  for (;;) {
+    nr_pdcp_redrain_req_t r;
+    pthread_mutex_lock(&nr_pdcp_redrain_q_m);
+    if (nr_pdcp_redrain_q_len == 0) {
+      pthread_mutex_unlock(&nr_pdcp_redrain_q_m);
+      break;
+    }
+    r = nr_pdcp_redrain_q[nr_pdcp_redrain_q_head];
+    nr_pdcp_redrain_q_head = (nr_pdcp_redrain_q_head + 1) % NR_PDCP_REDRAIN_Q_SIZE;
+    nr_pdcp_redrain_q_len--;
+    pthread_mutex_unlock(&nr_pdcp_redrain_q_m);
+    /* nr_pdcp_drain_and_forward_pending_sdus takes the PDCP manager lock itself */
+    nr_pdcp_drain_and_forward_pending_sdus(r.n3inst, r.ue_id, r.pdusession_id);
+  }
 }
 
 /** @brief Target side of Xn HO DL data forwarding: inject a forwarded backlog
@@ -1173,6 +1267,7 @@ void nr_pdcp_drain_and_forward_pending_sdus(instance_t n3inst, ue_id_t ue_id, in
   /* forward outside the PDCP lock (GTP-U takes its own lock) */
   int n_fwd = 0;
   int n_expired = 0;
+  int n_requeued = 0;
   for (int d = 0; d < n_drained; d++) {
     /* the wire carries the PDCP SN (12- or 18-bit), not the full COUNT */
     uint32_t sn_mask = drained[d].long_sn ? ((1u << LONG_SN_SIZE) - 1) : ((1u << SHORT_SN_SIZE) - 1);
@@ -1184,19 +1279,44 @@ void nr_pdcp_drain_and_forward_pending_sdus(instance_t n3inst, ue_id_t ue_id, in
       /* TS 38.323 5.3: do not forward an SDU whose discardTimer has expired */
       if (discard_timer >= 0 && now >= cur->t_arrival && (now - cur->t_arrival) >= (uint64_t)discard_timer) {
         n_expired++;
-      } else {
-        int fwd_qfi = cur->qfi >= 0 ? cur->qfi : 0;
-        /* bearer_id for the forwarding tunnel is the PDU session id */
-        if (GtpuForwardDlSduToFwdTunnel(n3inst, ue_id, pdusession_id, cur->count & sn_mask, drained[d].long_sn,
-                                        fwd_qfi, (uint8_t *)cur->data, cur->size))
-          n_fwd++;
+        free(cur);
+        cur = next;
+        continue;
       }
+      int fwd_qfi = cur->qfi >= 0 ? cur->qfi : 0;
+      /* bearer_id for the forwarding tunnel is the PDU session id */
+      bool ok = GtpuForwardDlSduToFwdTunnel(n3inst, ue_id, pdusession_id, (int64_t)(cur->count & sn_mask),
+                                            drained[d].long_sn, fwd_qfi, (uint8_t *)cur->data, cur->size);
+      if (!ok) {
+        /* TS 38.425 flow-control credit exhausted (or tunnel gone): stop draining
+         * this DRB and re-attach the remaining SDUs (cur..end, still linked via
+         * ->next) to the shadow ring so a later DDDS-triggered re-drain resumes. */
+        nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+        nr_pdcp_ue_t *ue2 = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+        nr_pdcp_entity_t *drb2 = nr_pdcp_get_rb(ue2, drained[d].drb_id, false);
+        if (drb2 != NULL && drb2->shadow_ring != NULL) {
+          nr_pdcp_shadow_ring_requeue_front(drb2->shadow_ring, cur);
+          nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+        } else {
+          /* entity gone: drop the remaining chain */
+          nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+          while (cur != NULL) {
+            nr_pdcp_shadow_sdu_t *n = cur->next;
+            free(cur);
+            cur = n;
+          }
+        }
+        n_requeued++;
+        cur = NULL; /* done with this DRB */
+        break;
+      }
+      n_fwd++;
       free(cur);
       cur = next;
     }
   }
-  if (n_fwd > 0 || n_expired > 0)
+  if (n_fwd > 0 || n_expired > 0 || n_requeued > 0)
     LOG_I(PDCP,
-          "Xn HO: forwarded %d buffered DL SDU(s) (%d dropped, discardTimer expired) for UE %ld PDU session %d\n",
-          n_fwd, n_expired, ue_id, pdusession_id);
+          "Xn HO: forwarded %d buffered DL SDU(s) (%d expired, %d DRB(s) requeued on flow-control) for UE %ld PDU session %d\n",
+          n_fwd, n_expired, n_requeued, ue_id, pdusession_id);
 }

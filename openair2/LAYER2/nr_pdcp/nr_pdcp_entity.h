@@ -77,6 +77,9 @@ void nr_pdcp_shadow_ring_ack(nr_pdcp_shadow_ring_t *ring, uint32_t count);
 void nr_pdcp_shadow_ring_sweep_expired(nr_pdcp_shadow_ring_t *ring, uint64_t now, int discard_timer);
 /* detaches and returns the whole pending list in ascending COUNT order (caller frees it), ring becomes empty */
 nr_pdcp_shadow_sdu_t *nr_pdcp_shadow_ring_drain(nr_pdcp_shadow_ring_t *ring);
+/* prepend a previously-drained list back onto the ring head, preserving COUNT order
+ * (used when TS 38.425 flow-control credit is exhausted mid-drain) */
+void nr_pdcp_shadow_ring_requeue_front(nr_pdcp_shadow_ring_t *ring, nr_pdcp_shadow_sdu_t *list);
 void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring);
 
 typedef struct {
@@ -164,6 +167,11 @@ typedef struct nr_pdcp_entity_s {
   uint32_t rx_next;
   uint32_t rx_deliv;
   uint32_t rx_reord;
+
+  /* highest DL COUNT confirmed delivered by RLC (gNB DRB, TS 38.425 DDDS
+   * reporting). 0 until the first successful delivery. */
+  uint32_t highest_delivered_count;
+  bool has_delivered_count;
 
   /* set to the latest know time by the user of the module. Unit: ms */
   uint64_t t_current;
