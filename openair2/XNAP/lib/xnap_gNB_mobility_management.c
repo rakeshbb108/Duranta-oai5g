@@ -8,6 +8,8 @@
 
 #include "xnap_gNB_mobility_management.h"
 #include "xnap_lib_common.h"
+#include "XNAP_DataForwardingResponseDRBItemList.h"
+#include "XNAP_DataForwardingResponseDRBItem.h"
 
 /**
  * @brief XnAP security capabilities encoding
@@ -713,8 +715,9 @@ XNAP_XnAP_PDU_t *encode_xnap_handover_request_acknowledge(const xnap_handover_re
       qosItem->qfi = qos->qfi;
     }
 
-    /* DL forwarding tunnel (optional): DataForwardingInfoFromTargetNGRANnode */
-    if (pdu->dl_fwd_tnl.teid != 0) {
+    /* DL forwarding tunnels (optional): DataForwardingInfoFromTargetNGRANnode
+     * with per-DRB dataForwardingResponseDRBItemList (TS 38.423 9.2.3.24) */
+    if (pdu->num_drb_fwd > 0) {
       asn1cCalloc(pduItem->pduSessionResourceAdmittedInfo.dataForwardingInfoFromTarget, fwdInfo);
 
       /* QoS flows accepted for DL forwarding: same set as admitted */
@@ -724,9 +727,15 @@ XNAP_XnAP_PDU_t *encode_xnap_handover_request_acknowledge(const xnap_handover_re
         fwdQos->qosFlowIdentifier = pdu->qos_list[j].qfi;
       }
 
-      /* pduSessionLevelDLDataForwardingInfo: GTP-U tunnel on target CU-UP */
-      asn1cCalloc(fwdInfo->pduSessionLevelDLDataForwardingInfo, dlFwdTnl);
-      *dlFwdTnl = xnap_encode_ul_ngu_tnl_info(&pdu->dl_fwd_tnl);
+      /* per-DRB DL forwarding tunnels on the target CU-UP */
+      asn1cCalloc(fwdInfo->dataForwardingResponseDRBItemList, drbList);
+      for (int k = 0; k < pdu->num_drb_fwd; k++) {
+        const xnap_drb_fwd_item_t *fwd = &pdu->drb_fwd_list[k];
+        asn1cSequenceAdd(drbList->list, XNAP_DataForwardingResponseDRBItem_t, drbItem);
+        drbItem->drb_ID = fwd->drb_id;
+        asn1cCalloc(drbItem->dlForwardingUPTNL, dlFwdTnl);
+        *dlFwdTnl = xnap_encode_ul_ngu_tnl_info(&fwd->dl_fwd_tnl);
+      }
     }
   }
 
@@ -820,11 +829,22 @@ bool decode_xnap_handover_request_acknowledge(xnap_handover_req_ack_t *out, cons
               }
             }
 
-            /* DL forwarding tunnel (optional) */
+            /* Per-DRB DL forwarding tunnels (optional): dataForwardingResponseDRBItemList */
             const XNAP_DataForwardingInfoFromTargetNGRANnode_t *fwdInfo =
                 pduItem->pduSessionResourceAdmittedInfo.dataForwardingInfoFromTarget;
-            if (fwdInfo && fwdInfo->pduSessionLevelDLDataForwardingInfo)
-              decode_xnap_ul_ngu_tnl_info(fwdInfo->pduSessionLevelDLDataForwardingInfo, &dst->dl_fwd_tnl);
+            if (fwdInfo && fwdInfo->dataForwardingResponseDRBItemList) {
+              const XNAP_DataForwardingResponseDRBItemList_t *drbList = fwdInfo->dataForwardingResponseDRBItemList;
+              int n = drbList->list.count;
+              if (n > MAX_DRBS_PER_UE)
+                n = MAX_DRBS_PER_UE;
+              dst->num_drb_fwd = n;
+              for (int k = 0; k < n; k++) {
+                const XNAP_DataForwardingResponseDRBItem_t *drbItem = drbList->list.array[k];
+                dst->drb_fwd_list[k].drb_id = drbItem->drb_ID;
+                if (drbItem->dlForwardingUPTNL)
+                  decode_xnap_ul_ngu_tnl_info(drbItem->dlForwardingUPTNL, &dst->drb_fwd_list[k].dl_fwd_tnl);
+              }
+            }
           }
         }
       } break;
@@ -866,7 +886,11 @@ static bool eq_xnap_pdusession_admitted_item(const xnap_pdusession_admitted_item
       return false;
   }
 
-  _EQ_CHECK_UINT32(a->dl_fwd_tnl.teid, b->dl_fwd_tnl.teid);
+  _EQ_CHECK_INT(a->num_drb_fwd, b->num_drb_fwd);
+  for (int i = 0; i < a->num_drb_fwd; i++) {
+    _EQ_CHECK_INT(a->drb_fwd_list[i].drb_id, b->drb_fwd_list[i].drb_id);
+    _EQ_CHECK_UINT32(a->drb_fwd_list[i].dl_fwd_tnl.teid, b->drb_fwd_list[i].dl_fwd_tnl.teid);
+  }
 
   return true;
 }

@@ -375,6 +375,9 @@ typedef struct DRB_nGRAN_to_setup_s {
   // QoS Flows Information To Be Setup (M) (clause 9.3.1.25, 9.3.1.26)
   int numQosFlow2Setup;
   qos_flow_to_setup_t qosFlows[E1AP_MAX_NUM_QOS_FLOWS];
+  // DRB Data Forwarding Information Request (O): request CU-UP to allocate a per-DRB
+  // DL forwarding TEID for Xn HO (clause 9.3.1.72, DRB-To-Setup-Item-NG-RAN)
+  bool dl_fwd_tnl_req;
 } DRB_nGRAN_to_setup_t;
 
 /**
@@ -397,6 +400,8 @@ typedef struct DRB_nGRAN_to_modify_s {
   // Flow Mapping Information (O) (clause 9.3.1.25, 9.3.1.26)
   int numQosFlowsMod;
   qos_flow_to_setup_t qosFlows[E1AP_MAX_NUM_QOS_FLOWS];
+  // Per-DRB DL data forwarding tunnel for Xn HO (source sets the target CU-UP endpoint)
+  UP_TL_information_t *dl_fwd_tnl;
 } DRB_nGRAN_to_mod_t;
 
 /* DRB To Remove Item (NG-RAN) clause 9.3.1.11 */
@@ -448,8 +453,6 @@ typedef struct pdu_session_to_setup_s {
   int numDRB2Setup;
   // DRB To Setup Item (1..<E1AP_MAX_NUM_DRBS>)
   DRB_nGRAN_to_setup_t DRBnGRanList[E1AP_MAX_NUM_DRBS];
-  // DL Data Forwarding Information Request (O): request CU-UP to allocate a forwarding TEID
-  bool dl_fwd_tnl_req;
 } pdu_session_to_setup_t;
 
 /**
@@ -473,8 +476,6 @@ typedef struct pdu_session_to_mod_s {
   // DRB To Remove List (0..maxnoofDRBs)
   int n_drb_to_remove;
   drb_to_remove_t drbs_to_remove[E1AP_MAX_NUM_DRBS];
-  // DL data forwarding tunnel for Xn HO (pDU-Session-Data-Forwarding-Information.dL-Data-Forwarding)
-  UP_TL_information_t *dl_fwd_tnl;
 } pdu_session_to_mod_t;
 
 /** PDU Session Resource To Remove List (3GPP TS 38.463 clause 9.3.3.12) */
@@ -579,6 +580,8 @@ typedef struct DRB_nGRAN_setup_s {
   // Flow Failed List (O)
   int numQosFlowFailed;
   qos_flow_failed_t qosFlowsFailed[E1AP_MAX_NUM_QOS_FLOWS];
+  // Per-DRB DL forwarding tunnel allocated by CU-UP (O): present only when dl_fwd_tnl_req set
+  UP_TL_information_t *dl_fwd_tnl;
 } DRB_nGRAN_setup_t;
 
 /* DRB Modified Item */
@@ -611,8 +614,6 @@ typedef struct pdu_session_setup_s {
   DRB_nGRAN_setup_t DRBnGRanList[E1AP_MAX_NUM_DRBS];
   int numDRBFailed;
   DRB_nGRAN_failed_t DRBnGRanFailedList[E1AP_MAX_NUM_DRBS];
-  // DL forwarding tunnel allocated by CU-UP (O): only present when dl_fwd_tnl_req was set
-  UP_TL_information_t *dl_fwd_tnl;
 } pdu_session_setup_t;
 
 /* PDU Session Resource Modified List (9.3.3.17) */

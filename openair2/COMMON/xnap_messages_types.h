@@ -323,6 +323,14 @@ typedef struct {
   uint8_t qfi;
 } xnap_qos_admitted_item_t;
 
+/* Per-DRB DL forwarding tunnel admitted by the target
+ * (TS 38.423 9.2.3.24 Data Forwarding Response DRB Item) */
+typedef struct {
+  uint8_t drb_id;
+  // target CU-UP DL forwarding endpoint; teid == 0 means absent
+  gtpu_tunnel_t dl_fwd_tnl;
+} xnap_drb_fwd_item_t;
+
 /* 3GPP TS 38.423 9.2.1.2 – PDU Session Resources Admitted Item */
 typedef struct {
   // PDU Session ID
@@ -330,9 +338,9 @@ typedef struct {
   // QoS Flows Admitted List
   uint8_t num_qos;
   xnap_qos_admitted_item_t *qos_list;
-  // DL forwarding GTP-U tunnel (target CU-UP endpoint for source→target forwarding)
-  // zero-initialised when not available (teid == 0 means absent)
-  gtpu_tunnel_t dl_fwd_tnl;
+  // Per-DRB DL forwarding tunnels (dataForwardingResponseDRBItemList)
+  uint8_t num_drb_fwd;
+  xnap_drb_fwd_item_t drb_fwd_list[MAX_DRBS_PER_UE];
 } xnap_pdusession_admitted_item_t;
 
 /* 3GPP TS 38.423 9.1.1.2 – Handover Request Acknowledge */

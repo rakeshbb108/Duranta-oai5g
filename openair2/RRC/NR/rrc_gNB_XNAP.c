@@ -359,10 +359,21 @@ void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byt
           admitted[idx].qos_list[j].qfi = qos->qos.qfi;
         }
       }
-      /* DL forwarding tunnel: use the target CU-UP N3 DL endpoint allocated during
-       * E1AP Bearer Context Setup — source gNB will forward DL data here until
-       * the UPF path switches after HandoverNotify. */
-      admitted[idx].dl_fwd_tnl = p->dl_fwd_cuup_tnl;
+      /* Per-DRB DL forwarding tunnels: advertise the target CU-UP DL forwarding
+       * endpoint allocated per DRB during E1AP Bearer Context Setup (TS 38.423
+       * DataForwardingResponseDRBItemList). The source gNB forwards DL data here
+       * until the UPF path switches after HandoverNotify. */
+      uint8_t nfwd = 0;
+      FOR_EACH_SEQ_ARR (drb_t *, drb, &UE->drbs) {
+        if (drb->pdusession_id != (int)p->param.pdusession_id || drb->dl_fwd_cuup_tnl.teid == 0)
+          continue;
+        if (nfwd >= MAX_DRBS_PER_UE)
+          break;
+        admitted[idx].drb_fwd_list[nfwd].drb_id = drb->drb_id;
+        admitted[idx].drb_fwd_list[nfwd].dl_fwd_tnl = drb->dl_fwd_cuup_tnl;
+        nfwd++;
+      }
+      admitted[idx].num_drb_fwd = nfwd;
       idx++;
     }
   }
@@ -404,18 +415,21 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
   UE->ho_context->source->tar_ue_xnap_id = msg->t_ng_node_ue_xnap_id;
   UE->ho_context->source->tar_assoc_id   = msg->source_assoc_id;
 
-  /* Store per-PDU-session DL forwarding tunnels received in HO ACK */
+  /* Store per-DRB DL forwarding tunnels received in HO ACK */
   for (int i = 0; i < msg->num_pdu_admitted; i++) {
     const xnap_pdusession_admitted_item_t *adm = &msg->pdusession_admitted_list[i];
-    if (adm->dl_fwd_tnl.teid == 0)
-      continue;
-    FOR_EACH_SEQ_ARR (rrc_pdu_session_param_t *, p, &UE->pduSessions) {
-      if (p->param.pdusession_id == adm->pdusession_id) {
-        p->dl_fwd_tnl = adm->dl_fwd_tnl;
-        LOG_I(NR_RRC, "UE %d: PDU session %d DL fwd tunnel teid 0x%x\n",
-              UE->rrc_ue_id, adm->pdusession_id, adm->dl_fwd_tnl.teid);
-        break;
+    for (int k = 0; k < adm->num_drb_fwd; k++) {
+      const xnap_drb_fwd_item_t *fwd = &adm->drb_fwd_list[k];
+      if (fwd->dl_fwd_tnl.teid == 0)
+        continue;
+      drb_t *drb = get_drb(&UE->drbs, fwd->drb_id);
+      if (!drb) {
+        LOG_W(NR_RRC, "UE %d: HO ACK DL fwd for unknown DRB %d\n", UE->rrc_ue_id, fwd->drb_id);
+        continue;
       }
+      drb->dl_fwd_tnl = fwd->dl_fwd_tnl;
+      LOG_I(NR_RRC, "UE %d: DRB %d DL fwd tunnel teid 0x%x\n",
+            UE->rrc_ue_id, fwd->drb_id, fwd->dl_fwd_tnl.teid);
     }
   }
 
@@ -436,20 +450,32 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
         UE->rrc_ue_id, UE->rnti);
   free_byte_array(buffer);
 
-  /* Now arm the DL forwarding tunnel(s) and drain the backlog to the target. */
+  /* Now arm the DL forwarding tunnel(s) and drain the backlog to the target.
+   * Build a per-PDU-session bearer-mod carrying the per-DRB forwarding tunnels
+   * (DRB_nGRAN_to_mod_t.dl_fwd_tnl). */
   if (ue_associated_to_cuup(UE) && msg->num_pdu_admitted > 0) {
     pdu_session_to_mod_t *fwd_sessions = calloc_or_fail(msg->num_pdu_admitted, sizeof(*fwd_sessions));
     int num_fwd = 0;
     for (int i = 0; i < msg->num_pdu_admitted; i++) {
       const xnap_pdusession_admitted_item_t *adm = &msg->pdusession_admitted_list[i];
-      if (adm->dl_fwd_tnl.teid == 0)
-        continue;
-      fwd_sessions[num_fwd].sessionId = adm->pdusession_id;
-      fwd_sessions[num_fwd].dl_fwd_tnl = calloc_or_fail(1, sizeof(*fwd_sessions[num_fwd].dl_fwd_tnl));
-      fwd_sessions[num_fwd].dl_fwd_tnl->teId = (int32_t)adm->dl_fwd_tnl.teid;
-      memcpy(&fwd_sessions[num_fwd].dl_fwd_tnl->tlAddress,
-             adm->dl_fwd_tnl.addr.buffer, sizeof(in_addr_t));
-      num_fwd++;
+      pdu_session_to_mod_t *sess = &fwd_sessions[num_fwd];
+      int nmod = 0;
+      for (int k = 0; k < adm->num_drb_fwd; k++) {
+        const xnap_drb_fwd_item_t *fwd = &adm->drb_fwd_list[k];
+        if (fwd->dl_fwd_tnl.teid == 0)
+          continue;
+        DRB_nGRAN_to_mod_t *drb_mod = &sess->DRBnGRanModList[nmod];
+        drb_mod->id = fwd->drb_id;
+        drb_mod->dl_fwd_tnl = calloc_or_fail(1, sizeof(*drb_mod->dl_fwd_tnl));
+        drb_mod->dl_fwd_tnl->teId = (int32_t)fwd->dl_fwd_tnl.teid;
+        memcpy(&drb_mod->dl_fwd_tnl->tlAddress, fwd->dl_fwd_tnl.addr.buffer, sizeof(in_addr_t));
+        nmod++;
+      }
+      if (nmod > 0) {
+        sess->sessionId = adm->pdusession_id;
+        sess->numDRB2Modify = nmod;
+        num_fwd++;
+      }
     }
     if (num_fwd > 0) {
       e1ap_bearer_mod_req_t e1_req = {
@@ -462,7 +488,8 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
       rrc->cucp_cuup.bearer_context_mod(assoc_id, &e1_req);
     }
     for (int i = 0; i < num_fwd; i++)
-      free(fwd_sessions[i].dl_fwd_tnl);
+      for (int j = 0; j < fwd_sessions[i].numDRB2Modify; j++)
+        free(fwd_sessions[i].DRBnGRanModList[j].dl_fwd_tnl);
     free(fwd_sessions);
   }
 }

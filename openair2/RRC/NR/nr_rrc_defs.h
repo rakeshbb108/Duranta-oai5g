@@ -100,10 +100,6 @@ typedef struct pdu_session_param_s {
   pdu_session_status_t status;
   uint8_t xid; // transaction_id
   ngap_cause_t cause;
-  // DL forwarding GTP-U tunnel received in Xn HO ACK (source side only)
-  gtpu_tunnel_t dl_fwd_tnl;
-  // DL forwarding GTP-U tunnel allocated by target CU-UP (target side only)
-  gtpu_tunnel_t dl_fwd_cuup_tnl;
 } rrc_pdu_session_param_t;
 
 /* Protocol-neutral PDCP COUNT value — used by both N2 and Xn SN Status Transfer */
@@ -127,6 +123,10 @@ typedef struct drb_s {
   gtpu_tunnel_t du_tunnel_config;
   // F1-U Uplink Tunnel Config (on CU-UP side)
   gtpu_tunnel_t cuup_tunnel_config;
+  // Per-DRB DL forwarding GTP-U tunnel received in Xn HO ACK (source side only)
+  gtpu_tunnel_t dl_fwd_tnl;
+  // Per-DRB DL forwarding GTP-U tunnel allocated by target CU-UP (target side only)
+  gtpu_tunnel_t dl_fwd_cuup_tnl;
   // DRB-specific PDCP configuration
   nr_pdcp_configuration_t pdcp_config;
 } drb_t;

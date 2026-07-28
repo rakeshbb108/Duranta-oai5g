@@ -143,9 +143,13 @@ static UP_TL_information_t n3_gtpu_create(const gtpv1u_gnb_create_tunnel_req_t *
   return out;
 }
 
-/* Allocate a GTP-U tunnel on the dedicated Xn-U interface for DL forwarding.
- * Xn-U has its own instance and key space, so pdusession_id is used as-is. */
-static UP_TL_information_t xn_gtpu_create(uint32_t ue_id, int pdusession_id)
+/* Allocate a GTP-U tunnel on the dedicated Xn-U interface for per-DRB DL
+ * forwarding (TS 38.423 DataForwardingResponseDRBItem). Xn-U has its own
+ * instance and key space, so the DRB id is used as the tunnel key
+ * (incoming_rb_id/outgoing_bearer_id). The tunnel's pdusession_id is kept as
+ * the real PDU session id so the target's SDAP QFI-demux on the forwarded data
+ * (sdap_data_req / nr_pdcp_data_req_drb_with_sn) resolves the right entity. */
+static UP_TL_information_t xn_gtpu_create(uint32_t ue_id, int drb_id, int pdusession_id)
 {
   instance_t xnuinst = get_xnu_gtp_instance();
   AssertFatal(xnuinst >= 0, "Xn-U GTP-U instance not available (XNAP not enabled?)\n");
@@ -155,17 +159,17 @@ static UP_TL_information_t xn_gtpu_create(uint32_t ue_id, int pdusession_id)
     .ue_id              = ue_id,
     .outgoing_teid      = 0,
     .pdusession_id      = pdusession_id,
-    .incoming_rb_id     = pdusession_id,
-    .outgoing_bearer_id = pdusession_id,
+    .incoming_rb_id     = drb_id,
+    .outgoing_bearer_id = drb_id,
     .dst_addr.length    = 32,
   };
   memset(req.dst_addr.buffer, 0, sizeof(req.dst_addr.buffer));
 
-  LOG_I(GTPU, "Xn-U fwd tunnel: PDUSession=%d incoming_rb_id=%d\n", pdusession_id, req.incoming_rb_id);
+  LOG_I(GTPU, "Xn-U fwd tunnel: DRB=%d (PDU session %d) incoming_rb_id=%d\n", drb_id, pdusession_id, req.incoming_rb_id);
 
   gtpv1u_gnb_create_tunnel_resp_t resp = {0};
   int ret = gtpv1u_create_ngu_tunnel(xnuinst, &req, &resp, nr_pdcp_data_req_drb, sdap_data_req);
-  AssertFatal(ret >= 0, "Unable to create GTP-U tunnel for Xn-U forwarding, PDU session %d\n", pdusession_id);
+  AssertFatal(ret >= 0, "Unable to create GTP-U tunnel for Xn-U forwarding, DRB %d\n", drb_id);
   AssertFatal(resp.gnb_addr.length == sizeof(in_addr_t),
               "GTP tunnel response address length %d does not match IPv4 size %zu\n",
               resp.gnb_addr.length,
@@ -299,6 +303,16 @@ void e1_bearer_context_setup(const e1ap_bearer_setup_req_t *req)
               up->tl_info.teId,
               up->tl_info.tlAddress);
       }
+
+      /* Per-DRB DL forwarding tunnel (Xn HO): allocate a separate Xn-U GTP-U
+       * TEID for DL data forwarding, disjoint from the F1-U/N3 tunnels. */
+      if (req_drb->dl_fwd_tnl_req) {
+        UP_TL_information_t fwd_tl_info = xn_gtpu_create(cu_up_ue_id, req_drb->id, req_pdu->sessionId);
+        resp_drb->dl_fwd_tnl = calloc_or_fail(1, sizeof(*resp_drb->dl_fwd_tnl));
+        *resp_drb->dl_fwd_tnl = fwd_tl_info;
+        LOG_I(E1AP, "UE %d: DL fwd tunnel for DRB %ld: TEID 0x%x\n",
+              cu_up_ue_id, req_drb->id, fwd_tl_info.teId);
+      }
     }
 
     /* Create PDCP/SDAP entities for each DRB */
@@ -320,16 +334,6 @@ void e1_bearer_context_setup(const e1ap_bearer_setup_req_t *req)
                                                     .dst_addr.length = 32};
     memcpy(&n3_tunnel_req.dst_addr.buffer, &req_pdu->UP_TL_information.tlAddress, sizeof(uint8_t) * 4); // only IPv4 now
     resp_pdu->tl_info = n3_gtpu_create(&n3_tunnel_req);
-
-    // DL forwarding tunnel: allocate a separate GTP-U TEID for DL data forwarding
-    // during Xn handover — the TEID space is disjoint from the N3 NG-U tunnel above.
-    if (req_pdu->dl_fwd_tnl_req) {
-      UP_TL_information_t fwd_tl_info = xn_gtpu_create(cu_up_ue_id, req_pdu->sessionId);
-      resp_pdu->dl_fwd_tnl = calloc_or_fail(1, sizeof(*resp_pdu->dl_fwd_tnl));
-      *resp_pdu->dl_fwd_tnl = fwd_tl_info;
-      LOG_I(E1AP, "UE %d: DL fwd tunnel for PDU session %ld: TEID 0x%x\n",
-            cu_up_ue_id, req_pdu->sessionId, fwd_tl_info.teId);
-    }
 
     // We assume all DRBs to setup have been setup successfully, so we always
     // send successful outcome in response and no failed DRBs
@@ -546,20 +550,32 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
       release_drb_resources(req->gNB_cu_up_ue_id, drb_id);
     }
 
-    /* DL data forwarding tunnel (Xn HO): redirect incoming DL packets on N3 to target CU-UP */
-    if (req_pdu_mod->dl_fwd_tnl) {
+    /* DL data forwarding (Xn HO): the target now signals a per-DRB DL forwarding
+     * tunnel (TS 38.423 DataForwardingResponseDRBItem). In this (monolithic)
+     * CU-UP the source forwards via its per-PDU-session N3 tunnel and the target
+     * QFI-demuxes incoming forwarded data to the right DRB, so we arm the N3
+     * tunnel with the session's forwarding endpoint (all DRBs of a session share
+     * the target CU-UP address). */
+    const UP_TL_information_t *sess_fwd = NULL;
+    for (int j = 0; j < req_pdu_mod->numDRB2Modify; j++) {
+      if (req_pdu_mod->DRBnGRanModList[j].dl_fwd_tnl) {
+        sess_fwd = req_pdu_mod->DRBnGRanModList[j].dl_fwd_tnl;
+        break;
+      }
+    }
+    if (sess_fwd) {
       instance_t n3inst = get_n3_gtp_instance();
       if (n3inst >= 0) {
         GtpuSetDLForwardingTunnel(n3inst,
                                   req->gNB_cu_up_ue_id,
                                   (int)req_pdu_mod->sessionId,
-                                  req_pdu_mod->dl_fwd_tnl->tlAddress,
-                                  (teid_t)req_pdu_mod->dl_fwd_tnl->teId);
+                                  sess_fwd->tlAddress,
+                                  (teid_t)sess_fwd->teId);
         LOG_I(E1AP,
               "UE %u: PDU session %ld DL forwarding tunnel TEID 0x%x\n",
               req->gNB_cu_up_ue_id,
               req_pdu_mod->sessionId,
-              req_pdu_mod->dl_fwd_tnl->teId);
+              sess_fwd->teId);
         /* forward the buffered-but-not-yet-transmitted DL backlog now, before
          * fresh N3 arrivals start being forwarded on this same tunnel */
         nr_pdcp_drain_and_forward_pending_sdus(n3inst, req->gNB_cu_up_ue_id, (int)req_pdu_mod->sessionId);
