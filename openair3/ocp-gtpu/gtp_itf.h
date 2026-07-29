@@ -154,6 +154,12 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
    *  of the first forwarded packet. */
   void GtpuSetDDDSReturnTunnel(instance_t instance, ue_id_t ue_id, int bearer_id, teid_t returnTeid);
 
+  /** @brief Periodic TS 38.425 DDDS emit for HO forwarding flow control (target
+   *  side). Call from a ~ms periodic context OUTSIDE any PDCP/RLC lock; emits at
+   *  most every ~10 ms per armed forwarding-receive tunnel so a stopped source
+   *  resumes. now_ms is a monotonic millisecond clock. */
+  void GtpuDDDSPeriodic(uint64_t now_ms);
+
   int newGtpuDeleteOneTunnel(instance_t instance, ue_id_t ue_id, int rb_id);
   int newGtpuDeleteAllTunnels(instance_t instance, ue_id_t ue_id);
 

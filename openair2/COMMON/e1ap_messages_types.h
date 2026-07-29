@@ -453,6 +453,10 @@ typedef struct pdu_session_to_setup_s {
   int numDRB2Setup;
   // DRB To Setup Item (1..<E1AP_MAX_NUM_DRBS>)
   DRB_nGRAN_to_setup_t DRBnGRanList[E1AP_MAX_NUM_DRBS];
+  // Source NG-RAN DL endpoint for TS 38.425 DDDS return (Xn HO): target arms
+  // GtpuSetDDDSReturnTunnel with this. teid == 0 when absent. (Monolithic
+  // direct-E1 only; not carried over split-E1 ASN.1.)
+  gtpu_tunnel_t dl_fwd_return_tnl;
 } pdu_session_to_setup_t;
 
 /**

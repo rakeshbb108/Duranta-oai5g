@@ -284,6 +284,14 @@ XNAP_XnAP_PDU_t *encode_xnap_handover_request(const xnap_handover_req_t *req)
     pduItem->uL_NG_U_TNLatUPF.present = XNAP_UPTransportLayerInformation_PR_gtpTunnel;
     pduItem->uL_NG_U_TNLatUPF = xnap_encode_ul_ngu_tnl_info(&pdu->n3_incoming);
 
+    /* Source DL NG-U TNL Information (optional): the source's own DL endpoint,
+     * reused by the target as the TS 38.425 DDDS return address for HO
+     * forwarding flow control. */
+    if (pdu->source_dl_ngu_tnl.teid != 0) {
+      asn1cCalloc(pduItem->source_DL_NG_U_TNL_Information, srcTnl);
+      *srcTnl = xnap_encode_ul_ngu_tnl_info(&pdu->source_dl_ngu_tnl);
+    }
+
     /* PDU Session Type */
     pduItem->pduSessionType = pdu->pdu_session_type;
 
@@ -437,6 +445,10 @@ bool decode_xnap_handover_request(xnap_handover_req_t *out, const XNAP_XnAP_PDU_
 
           if (!decode_xnap_ul_ngu_tnl_info(&pdu->uL_NG_U_TNLatUPF, &dst->n3_incoming))
             return false;
+
+          /* Source DL NG-U TNL Information (optional): TS 38.425 DDDS return endpoint */
+          if (pdu->source_DL_NG_U_TNL_Information)
+            decode_xnap_ul_ngu_tnl_info(pdu->source_DL_NG_U_TNL_Information, &dst->source_dl_ngu_tnl);
 
           dst->pdu_session_type = pdu->pduSessionType;
 

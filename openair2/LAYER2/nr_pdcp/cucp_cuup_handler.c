@@ -312,6 +312,15 @@ void e1_bearer_context_setup(const e1ap_bearer_setup_req_t *req)
         *resp_drb->dl_fwd_tnl = fwd_tl_info;
         LOG_I(E1AP, "UE %d: DL fwd tunnel for DRB %ld: TEID 0x%x\n",
               cu_up_ue_id, req_drb->id, fwd_tl_info.teId);
+        /* TS 38.425 DDDS: if the source advertised its DL NG-U return endpoint,
+         * arm the reverse channel so the target flow-controls the source's
+         * forwarding. The return address is captured from the recvfrom of the
+         * first forwarded packet; only the TEID needs signalling. */
+        if (req_pdu->dl_fwd_return_tnl.teid != 0) {
+          instance_t xnuinst = get_xnu_gtp_instance();
+          if (xnuinst >= 0)
+            GtpuSetDDDSReturnTunnel(xnuinst, cu_up_ue_id, req_drb->id, req_pdu->dl_fwd_return_tnl.teid);
+        }
       }
     }
 

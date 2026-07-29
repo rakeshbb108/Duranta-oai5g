@@ -761,6 +761,58 @@ void GtpuSetDDDSReturnTunnel(instance_t instance, ue_id_t ue_id, int bearer_id, 
   pthread_mutex_unlock(&globGtp.gtp_lock);
 }
 
+/* TS 38.425 flow control (Xn HO), TARGET side: periodic DDDS emit. Ensures a
+ * fully-stopped source (credit 0, sending nothing) still gets a fresh
+ * desired-buffer-size and resumes — RX-driven emits alone cannot do this. Call
+ * from a ~ms periodic context (PDCP timer thread), OUTSIDE any PDCP/RLC lock:
+ * we collect due tunnels under gtp_lock, then compute RLC headroom / PDCP SNs
+ * (which take their own locks) and send after releasing gtp_lock. */
+#define GTPU_DDDS_PERIOD_MS 10
+#define GTPU_DDDS_EMIT_MAX 64
+void GtpuDDDSPeriodic(uint64_t now_ms)
+{
+  if (XnUGTPUInst == NULL)
+    return;
+  int sock = compatInst(*XnUGTPUInst);
+  struct { ue_id_t ue_id; uint16_t rb_id; teid_t teid; struct sockaddr_storage addr; } due[GTPU_DDDS_EMIT_MAX];
+  int ndue = 0;
+
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  for (auto &kv : globGtp.te2ue_mapping) {
+    ueidData_t &e = kv.second;
+    if (e.ddds_teid == 0 || !e.ddds_addr_valid)
+      continue; /* not a HO forwarding-receive tunnel with the return channel armed */
+    if (now_ms - e.ddds_last_report_ms < GTPU_DDDS_PERIOD_MS)
+      continue;
+    e.ddds_last_report_ms = now_ms;
+    e.ddds_rx_since_report = 0;
+    if (ndue < GTPU_DDDS_EMIT_MAX) {
+      due[ndue].ue_id = e.ue_id;
+      due[ndue].rb_id = e.incoming_rb_id;
+      due[ndue].teid = e.ddds_teid;
+      due[ndue].addr = e.ddds_addr;
+      ndue++;
+    }
+  }
+  pthread_mutex_unlock(&globGtp.gtp_lock);
+
+  for (int i = 0; i < ndue; i++) {
+    /* RLC (DU-side) is keyed by RNTI, not by the CU UE ID due[i].ue_id carries
+     * for the PDCP calls below — translate via the F1 UE-ID table. */
+    rnti_t rnti = cu_get_f1_ue_data(due[i].ue_id).secondary_ue;
+    int rlc_space = nr_rlc_get_available_tx_space(rnti, due[i].rb_id + 3);
+    uint32_t dbs = rlc_space > 0 ? (uint32_t)rlc_space : 0;
+    int htx = nr_pdcp_get_highest_tx_sn(due[i].ue_id, due[i].rb_id);
+    int hdl = nr_pdcp_get_highest_delivered_sn(due[i].ue_id, due[i].rb_id);
+    gtpu_extension_header_t ext;
+    fillDlDeliveryStatusReport(&ext, dbs, htx, hdl);
+    gtpv1u_bearer_t bearer = create_bearer(sock, (const struct sockaddr_in *)&due[i].addr, due[i].teid, 0);
+    gtpv1uCreateAndSendMsg(&bearer, GTP_GPDU, NULL, 0, false, false, &ext, 1);
+    LOG_D(GTPU, "periodic DDDS: UE %lu rb %u dbs=%u htx=%d hdl=%d -> TEID 0x%x\n",
+          due[i].ue_id, due[i].rb_id, dbs, htx, hdl, due[i].teid);
+  }
+}
+
 /* TS 38.425 flow control (Xn HO), SOURCE side: apply a DDDS received from the
  * target. Updates the byte credit on the source's forwarding tunnel entry
  * (the one GtpuForwardDlSduToFwdTunnel throttles on). Returns true when the

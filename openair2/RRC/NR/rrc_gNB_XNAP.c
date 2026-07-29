@@ -112,6 +112,9 @@ bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
     item->pdu_session_type      = ps->pdu_session_type;
     item->n3_incoming           = ps->n3_incoming;
     item->dl_forwarding_proposed = true;
+    /* advertise our own DL NG-U endpoint as the TS 38.425 DDDS return address so
+     * the target can flow-control our HO DL forwarding (Xn-U) */
+    item->source_dl_ngu_tnl     = ps->n3_outgoing;
 
     nssai_t *nssai_copy = malloc(sizeof(*nssai_copy));
     AssertFatal(nssai_copy != NULL, "malloc failed for nssai\n");
@@ -304,6 +307,8 @@ int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t
     pdu->pdu_session_type      = xpdu->pdu_session_type;
     pdu->n3_incoming           = xpdu->n3_incoming;
     pdu->dl_forwarding_proposed = xpdu->dl_forwarding_proposed;
+    /* source's DL NG-U endpoint -> TS 38.425 DDDS return address for HO forwarding */
+    pdu->dl_fwd_return_tnl     = xpdu->source_dl_ngu_tnl;
     if (xpdu->nssai)
       pdu->nssai = *xpdu->nssai;
 

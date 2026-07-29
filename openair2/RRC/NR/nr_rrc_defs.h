@@ -93,6 +93,9 @@ typedef struct pdusession_s {
   nr_sdap_configuration_t sdap_config;
   // Source proposed DL forwarding for this session (from XnAP HandoverRequest)
   bool dl_forwarding_proposed;
+  // Source NG-RAN DL NG-U endpoint (Xn HO): target sends TS 38.425 DDDS
+  // flow-control frames back here; teid == 0 when absent
+  gtpu_tunnel_t dl_fwd_return_tnl;
 } pdusession_t;
 
 typedef struct pdu_session_param_s {

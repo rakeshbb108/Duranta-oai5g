@@ -260,6 +260,10 @@ typedef struct {
   xnap_qos_flow_tobe_setup_item_t *qos_list;
   // Source proposed DL forwarding for this session (from dataforwardinginfofromSource IE)
   bool dl_forwarding_proposed;
+  // Source NG-RAN DL NG-U TNL Information (TS 38.423 9.2.3.x): the source's own
+  // DL endpoint, reused as the TS 38.425 DDDS return address for HO forwarding
+  // flow control. teid == 0 when absent.
+  gtpu_tunnel_t source_dl_ngu_tnl;
 } xnap_pdusession_resources_tobe_setup_item_t;
 
 typedef struct {
