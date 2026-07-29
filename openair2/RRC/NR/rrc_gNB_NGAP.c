@@ -331,6 +331,8 @@ static pdu_session_to_setup_t fill_e1_pdusession_to_setup(const pdusession_t *se
   char ip_str[INET_ADDRSTRLEN] = {0};
   inet_ntop(AF_INET, n3_incoming->addr.buffer, ip_str, sizeof(ip_str));
   LOG_I(NR_RRC, "PDU Session to Setup: PDU Session ID=%d, incoming TEID=0x%08x, Addr=%s\n", session->pdusession_id, n3_incoming->teid, ip_str);
+  // Xn HO: source's DL NG-U endpoint for TS 38.425 DDDS return (0 when not a HO setup)
+  pdu.dl_fwd_return_tnl = session->dl_fwd_return_tnl;
   return pdu;
 }
 
