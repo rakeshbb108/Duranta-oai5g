@@ -606,14 +606,22 @@ void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 
   LOG_I(NR_RRC, "UE %u: sending XNAP UE Context Release to source gNB\n", UE->rrc_ue_id);
 
+  /* Xn-U forwarding tunnels are keyed by DRB id, not PDU session id: release
+   * every DRB of an established session that has an armed forwarding tunnel. */
   int n_xnu = 0;
-  int xnu_pdu_ids[NR_MAX_NB_PDU_SESSIONS];
-  FOR_EACH_SEQ_ARR(rrc_pdu_session_param_t *, p, &UE->pduSessions) {
-    if (p->status == PDU_SESSION_STATUS_ESTABLISHED)
-      xnu_pdu_ids[n_xnu++] = p->param.pdusession_id;
+  int xnu_drb_ids[MAX_DRBS_PER_UE];
+  FOR_EACH_SEQ_ARR(drb_t *, drb, &UE->drbs) {
+    if (drb->dl_fwd_cuup_tnl.teid == 0)
+      continue;
+    rrc_pdu_session_param_t *p = find_pduSession(&UE->pduSessions, drb->pdusession_id);
+    if (p == NULL || p->status != PDU_SESSION_STATUS_ESTABLISHED)
+      continue;
+    if (n_xnu >= MAX_DRBS_PER_UE)
+      break;
+    xnu_drb_ids[n_xnu++] = drb->drb_id;
   }
   if (n_xnu > 0)
-    e1_remove_xnu_tunnels(UE->rrc_ue_id, n_xnu, xnu_pdu_ids);
+    e1_remove_xnu_tunnels(UE->rrc_ue_id, n_xnu, xnu_drb_ids);
 
   xnap_ue_context_release_t msg = {
     .s_ng_node_ue_xnap_id = UE->ho_context->target->src_ue_xnap_id,
@@ -807,14 +815,22 @@ void rrc_gNB_xn_ho_target_abort(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const char 
 
   LOG_E(NR_RRC, "UE %u: aborting Xn handover at target: %s\n", UE->rrc_ue_id, why);
 
+  /* Xn-U forwarding tunnels are keyed by DRB id, not PDU session id: release
+   * every DRB of an established session that has an armed forwarding tunnel. */
   int n_xnu = 0;
-  int xnu_pdu_ids[NR_MAX_NB_PDU_SESSIONS];
-  FOR_EACH_SEQ_ARR(rrc_pdu_session_param_t *, p, &UE->pduSessions) {
-    if (p->status == PDU_SESSION_STATUS_ESTABLISHED)
-      xnu_pdu_ids[n_xnu++] = p->param.pdusession_id;
+  int xnu_drb_ids[MAX_DRBS_PER_UE];
+  FOR_EACH_SEQ_ARR(drb_t *, drb, &UE->drbs) {
+    if (drb->dl_fwd_cuup_tnl.teid == 0)
+      continue;
+    rrc_pdu_session_param_t *p = find_pduSession(&UE->pduSessions, drb->pdusession_id);
+    if (p == NULL || p->status != PDU_SESSION_STATUS_ESTABLISHED)
+      continue;
+    if (n_xnu >= MAX_DRBS_PER_UE)
+      break;
+    xnu_drb_ids[n_xnu++] = drb->drb_id;
   }
   if (n_xnu > 0)
-    e1_remove_xnu_tunnels(UE->rrc_ue_id, n_xnu, xnu_pdu_ids);
+    e1_remove_xnu_tunnels(UE->rrc_ue_id, n_xnu, xnu_drb_ids);
 
   if (ue_associated_to_cuup(UE)) {
     sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
