@@ -648,13 +648,13 @@ void e1_reset(void)
   }
 }
 
-void e1_remove_xnu_tunnels(uint32_t ue_id, int n_pdu, int *pdu_ids)
+void e1_remove_xnu_tunnels(uint32_t ue_id, int n_drb, int *drb_ids)
 {
   instance_t xnuinst = get_xnu_gtp_instance();
   if (xnuinst < 0)
     return;
-  for (int i = 0; i < n_pdu; i++) {
-    LOG_I(GTPU, "UE %u: removing Xn-U forwarding tunnel rb_id=%d\n", ue_id, pdu_ids[i]);
-    newGtpuDeleteOneTunnel(xnuinst, ue_id, pdu_ids[i]);
+  for (int i = 0; i < n_drb; i++) {
+    LOG_I(GTPU, "UE %u: removing Xn-U forwarding tunnel rb_id=%d\n", ue_id, drb_ids[i]);
+    newGtpuDeleteOneTunnel(xnuinst, ue_id, drb_ids[i]);
   }
 }
