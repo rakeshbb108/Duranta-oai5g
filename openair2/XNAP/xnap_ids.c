@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include "ds/hashtable.h"
 #include "common/utils/assertions.h"
+#include "common/utils/LOG/log.h"
 
 /* Source-side table: s_ng_node_ue_xnap_id → xnap_ue_data_t */
 static hash_table_t    *xnap_ue_mapping;
@@ -100,6 +101,94 @@ bool xnap_set_ue_target_id(uint32_t xnap_ue_id, uint32_t t_xnap_ue_id)
   return rc == HASH_TABLE_OK && data != NULL;
 }
 
+bool xnap_set_ue_sm_state(uint32_t xnap_ue_id, xnap_ho_src_state_t state)
+{
+  pthread_mutex_lock(&xnap_ue_mutex);
+  DevAssert(xnap_ue_mapping != NULL);
+  void *data = NULL;
+  hashtable_rc_t rc = hashtable_get(xnap_ue_mapping, xnap_ue_id, &data);
+  if (rc == HASH_TABLE_OK && data != NULL)
+    ((xnap_ue_data_t *)data)->sm_state = state;
+  pthread_mutex_unlock(&xnap_ue_mutex);
+  return rc == HASH_TABLE_OK && data != NULL;
+}
+
+bool xnap_set_ue_timer_mark_relocprep(uint32_t xnap_ue_id, uint64_t now)
+{
+  pthread_mutex_lock(&xnap_ue_mutex);
+  DevAssert(xnap_ue_mapping != NULL);
+  void *data = NULL;
+  hashtable_rc_t rc = hashtable_get(xnap_ue_mapping, xnap_ue_id, &data);
+  if (rc == HASH_TABLE_OK && data != NULL)
+    xnap_ho_src_set_relocprep_start(&((xnap_ue_data_t *)data)->timer_marks, now);
+  pthread_mutex_unlock(&xnap_ue_mutex);
+  return rc == HASH_TABLE_OK && data != NULL;
+}
+
+bool xnap_set_ue_timer_mark_relocoverall(uint32_t xnap_ue_id, uint64_t now)
+{
+  pthread_mutex_lock(&xnap_ue_mutex);
+  DevAssert(xnap_ue_mapping != NULL);
+  void *data = NULL;
+  hashtable_rc_t rc = hashtable_get(xnap_ue_mapping, xnap_ue_id, &data);
+  if (rc == HASH_TABLE_OK && data != NULL)
+    xnap_ho_src_set_relocoverall_start(&((xnap_ue_data_t *)data)->timer_marks, now);
+  pthread_mutex_unlock(&xnap_ue_mutex);
+  return rc == HASH_TABLE_OK && data != NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Source-side HO timer roster (bounded array, see XNAP_MAX_HO_TIMERS)  */
+/* ------------------------------------------------------------------ */
+
+static uint32_t        xnap_ho_timer_ids[XNAP_MAX_HO_TIMERS]; /* 0 = free slot */
+static pthread_mutex_t xnap_ho_timer_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void xnap_ho_timer_track(uint32_t xnap_ue_id)
+{
+  pthread_mutex_lock(&xnap_ho_timer_mutex);
+  for (int i = 0; i < XNAP_MAX_HO_TIMERS; i++) {
+    if (xnap_ho_timer_ids[i] == xnap_ue_id) {
+      pthread_mutex_unlock(&xnap_ho_timer_mutex);
+      return; /* already tracked (HO_REQ_SENT -> HO_PREPARED keeps the same slot) */
+    }
+  }
+  for (int i = 0; i < XNAP_MAX_HO_TIMERS; i++) {
+    if (xnap_ho_timer_ids[i] == 0) {
+      xnap_ho_timer_ids[i] = xnap_ue_id;
+      pthread_mutex_unlock(&xnap_ho_timer_mutex);
+      return;
+    }
+  }
+  pthread_mutex_unlock(&xnap_ho_timer_mutex);
+  LOG_E(XNAP, "xnap_ho_timer_track: no free slot (XNAP_MAX_HO_TIMERS=%d) for xnap_ue_id %u — guard timer not armed\n",
+        XNAP_MAX_HO_TIMERS, xnap_ue_id);
+}
+
+void xnap_ho_timer_untrack(uint32_t xnap_ue_id)
+{
+  pthread_mutex_lock(&xnap_ho_timer_mutex);
+  for (int i = 0; i < XNAP_MAX_HO_TIMERS; i++) {
+    if (xnap_ho_timer_ids[i] == xnap_ue_id) {
+      xnap_ho_timer_ids[i] = 0;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&xnap_ho_timer_mutex);
+}
+
+int xnap_ho_get_tracked_source_ids(uint32_t out_ids[], int max_ids)
+{
+  int n = 0;
+  pthread_mutex_lock(&xnap_ho_timer_mutex);
+  for (int i = 0; i < XNAP_MAX_HO_TIMERS && n < max_ids; i++) {
+    if (xnap_ho_timer_ids[i] != 0)
+      out_ids[n++] = xnap_ho_timer_ids[i];
+  }
+  pthread_mutex_unlock(&xnap_ho_timer_mutex);
+  return n;
+}
+
 /* ------------------------------------------------------------------ */
 /* Target-side table                                                    */
 /* ------------------------------------------------------------------ */
@@ -176,4 +265,16 @@ xnap_target_ue_data_t *xnap_find_target_ue_by_source_id(uint32_t s_xnap_ue_id, u
   }
   pthread_mutex_unlock(&xnap_target_ue_mutex);
   return found;
+}
+
+bool xnap_set_target_ue_sm_state(uint32_t t_xnap_ue_id, xnap_ho_tgt_state_t state)
+{
+  pthread_mutex_lock(&xnap_target_ue_mutex);
+  DevAssert(xnap_target_ue_mapping != NULL);
+  void *data = NULL;
+  hashtable_rc_t rc = hashtable_get(xnap_target_ue_mapping, t_xnap_ue_id, &data);
+  if (rc == HASH_TABLE_OK && data != NULL)
+    ((xnap_target_ue_data_t *)data)->sm_state = state;
+  pthread_mutex_unlock(&xnap_target_ue_mutex);
+  return rc == HASH_TABLE_OK && data != NULL;
 }

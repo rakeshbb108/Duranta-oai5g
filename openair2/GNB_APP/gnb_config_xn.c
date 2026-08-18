@@ -36,6 +36,8 @@ xnap_net_config_t read_ip_config_xn(uint32_t gnb_idx)
   char **gnb_xn_ip_strptr = gpd(XnParams, nb_xn_params, GNB_CONFIG_STRING_GNB_IPV4_ADDRESS_FOR_XNC)->strptr;
   AssertFatal(gnb_xn_ip_strptr != NULL, "gNB IP not added in the CU/gNB configuration file\n");
   nc.gnb_xn_interface_ip_address = strdup(*gnb_xn_ip_strptr);
+  nc.t_xn_reloc_prep_ms = *gpd(XnParams, nb_xn_params, GNB_CONFIG_STRING_T_XN_RELOC_PREP)->uptr;
+  nc.t_xn_reloc_overall_ms = *gpd(XnParams, nb_xn_params, GNB_CONFIG_STRING_T_XN_RELOC_OVERALL)->uptr;
 
   nc.sctp_streams.sctp_out_streams = SCTP_OUT_STREAMS;
   nc.sctp_streams.sctp_in_streams = SCTP_IN_STREAMS;

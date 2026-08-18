@@ -24,3 +24,10 @@ MESSAGE_DEF(XNAP_UE_CONTEXT_RELEASE,   MESSAGE_PRIORITY_MED, xnap_ue_context_rel
 
 /* Handover Cancel: RRC -> XNAP (source sends) / XNAP -> RRC (target receives) */
 MESSAGE_DEF(XNAP_HANDOVER_CANCEL,      MESSAGE_PRIORITY_MED, xnap_handover_cancel_t,      xnap_handover_cancel)
+
+/* TXnRELOCprep/TXnRELOCoverall expiry (source-only guard timers, xnap_ho_timers.c): XNAP -> RRC only */
+MESSAGE_DEF(XNAP_HO_RELOCPREP_TIMEOUT,    MESSAGE_PRIORITY_MED, xnap_ho_relocprep_timeout_t,    xnap_ho_relocprep_timeout)
+MESSAGE_DEF(XNAP_HO_RELOCOVERALL_TIMEOUT, MESSAGE_PRIORITY_MED, xnap_ho_relocoverall_timeout_t, xnap_ho_relocoverall_timeout)
+
+/* XNAP -> XNAP self-message, driven by the shared time_manager clock (see xnap_ms_tick()) */
+MESSAGE_DEF(XNAP_HO_TIMER_TICK, MESSAGE_PRIORITY_MED, xnap_ho_timer_tick_t, xnap_ho_timer_tick)
