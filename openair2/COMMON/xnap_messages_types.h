@@ -22,6 +22,9 @@
 #define XNAP_SN_STATUS_TRANSFER(mSGpTR)   (mSGpTR)->ittiMsg.xnap_sn_status_transfer
 #define XNAP_UE_CONTEXT_RELEASE(mSGpTR)   (mSGpTR)->ittiMsg.xnap_ue_context_release
 #define XNAP_HANDOVER_CANCEL(mSGpTR)      (mSGpTR)->ittiMsg.xnap_handover_cancel
+#define XNAP_HO_RELOCPREP_TIMEOUT(mSGpTR)    (mSGpTR)->ittiMsg.xnap_ho_relocprep_timeout
+#define XNAP_HO_RELOCOVERALL_TIMEOUT(mSGpTR) (mSGpTR)->ittiMsg.xnap_ho_relocoverall_timeout
+#define XNAP_HO_TIMER_TICK(mSGpTR)           (mSGpTR)->ittiMsg.xnap_ho_timer_tick
 
 typedef struct {
   // PLMN Identity (M)
@@ -83,6 +86,9 @@ typedef struct xnap_net_config_t {
   uint8_t nb_of_candidate_gNBs;
   char *candidate_gnb_address_for_xnc[XNAP_MAX_NB_CANDIDATES];
   xnap_sctp_t sctp_streams;
+  /* TXnRELOCprep / TXnRELOCoverall guard timer durations (TS 38.423 §8.2.1.2), milliseconds */
+  uint32_t t_xn_reloc_prep_ms;
+  uint32_t t_xn_reloc_overall_ms;
 } xnap_net_config_t;
 
 typedef struct xnap_register_gnb_req_s {
@@ -462,6 +468,25 @@ typedef struct {
   /* Cause (M) */
   xnap_cause_t cause;
 } xnap_handover_cancel_t;
+
+/* XNAP -> RRC only: TXnRELOCprep/TXnRELOCoverall expired at the source before
+ * the corresponding Xn message arrived (see openair2/XNAP/xnap_ho_sm.h and
+ * xnap_ho_timers.c). Not an XnAP PDU — XNAP already sent HandoverCancel over
+ * Xn on its own; this just tells RRC to release its side locally. */
+typedef struct {
+  uint32_t rrc_ue_id;
+} xnap_ho_relocprep_timeout_t;
+
+typedef struct {
+  uint32_t rrc_ue_id;
+} xnap_ho_relocoverall_timeout_t;
+
+/* Self-message that drives xnap_check_ho_timers(), sent by xnap_ms_tick() once per
+ * (real or simulated) millisecond from the shared common/utils/time_manager clock —
+ * same pattern as X2AP's X2AP_SUBFRAME_PROCESS / x2ap_ms_tick(). */
+typedef struct {
+  uint32_t dummy;
+} xnap_ho_timer_tick_t;
 
 /* 3GPP TS 38.423 9.1.1.12 – Handover Success */
 typedef struct {
