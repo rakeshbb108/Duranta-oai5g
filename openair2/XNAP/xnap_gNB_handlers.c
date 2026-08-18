@@ -7,6 +7,8 @@
 #include "xnap_common.h"
 #include "xnap_gNB_encoder.h"
 #include "xnap_ids.h"
+#include "xnap_ho_sm.h"
+#include "xnap_ho_timers.h"
 #include "lib/xnap_gNB_interface_management.h"
 #include "lib/xnap_gNB_mobility_management.h"
 #include "aper_decoder.h"
@@ -244,7 +246,14 @@ static int xnap_gNB_handle_handover_request_acknowledge(instance_t instance,
     return -1;
   }
   xnap_ue_data_t ue_data = xnap_get_ue_data(ack.s_ng_node_ue_xnap_id);
+  xnap_ho_src_result_t r = xnap_ho_src_transition(ue_data.sm_state, XNAP_HO_SRC_EV_HANDOVER_REQUEST_ACK);
+  if (r.action == XNAP_HO_SRC_ACT_ILLEGAL) {
+    free_xnap_handover_request_acknowledge(&ack);
+    return -1;
+  }
   xnap_set_ue_target_id(ack.s_ng_node_ue_xnap_id, ack.t_ng_node_ue_xnap_id);
+  xnap_set_ue_sm_state(ack.s_ng_node_ue_xnap_id, r.next_state);
+  xnap_set_ue_timer_mark_relocoverall(ack.s_ng_node_ue_xnap_id, xnap_ho_timers_now());
 
   /* Populate routing fields for RRC */
   ack.rrc_ue_id       = ue_data.rrc_ue_id;
@@ -286,7 +295,12 @@ static int xnap_gNB_handle_handover_prep_failure(instance_t instance,
     return -1;
   }
   xnap_ue_data_t ue_data = xnap_get_ue_data(fail.s_ng_node_ue_xnap_id);
+  xnap_ho_src_result_t r = xnap_ho_src_transition(ue_data.sm_state, XNAP_HO_SRC_EV_HANDOVER_PREP_FAILURE);
+  xnap_ho_timer_untrack(fail.s_ng_node_ue_xnap_id);
   xnap_remove_ue_data(fail.s_ng_node_ue_xnap_id);
+
+  if (r.action == XNAP_HO_SRC_ACT_ILLEGAL)
+    return -1;
 
   fail.rrc_ue_id = ue_data.rrc_ue_id;
   fail.assoc_id  = assoc_id;
@@ -381,6 +395,17 @@ static int xnap_gNB_handle_ue_context_release(instance_t instance,
     return -1;
   }
 
+  /* RRC still resolves rrc_ue_id and removes the xnap_ue_data entry itself
+   * (rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE) — this only updates/guards sm_state. */
+  if (xnap_exists_ue_data(msg.s_ng_node_ue_xnap_id)) {
+    xnap_ue_data_t ue_data = xnap_get_ue_data(msg.s_ng_node_ue_xnap_id);
+    xnap_ho_src_result_t r = xnap_ho_src_transition(ue_data.sm_state, XNAP_HO_SRC_EV_UE_CONTEXT_RELEASE);
+    if (r.action == XNAP_HO_SRC_ACT_ILLEGAL)
+      return -1;
+    xnap_set_ue_sm_state(msg.s_ng_node_ue_xnap_id, r.next_state);
+    xnap_ho_timer_untrack(msg.s_ng_node_ue_xnap_id);
+  }
+
   MessageDef *itti_msg = itti_alloc_new_message(TASK_XNAP, inst->instance, XNAP_UE_CONTEXT_RELEASE);
   XNAP_UE_CONTEXT_RELEASE(itti_msg) = msg;
   itti_send_msg_to_task(TASK_RRC_GNB, inst->instance, itti_msg);
@@ -408,6 +433,21 @@ static int xnap_gNB_handle_handover_cancel(instance_t instance,
     LOG_E(XNAP, "[gNB %ld] Failed to decode HandoverCancel from assoc_id %d\n",
           instance, assoc_id);
     return -1;
+  }
+
+  /* Guard only applies once an entry exists (post-Ack, keyed by
+   * t_ng_node_ue_xnap_id — Cancel itself only carries s_ng_node_ue_xnap_id).
+   * Pre-Ack (no early t_xnap_ue_id allocation) stays untracked: forward as
+   * today and let RRC's existing UE-tree fallback scan resolve it. */
+  uint32_t t_xnap_ue_id = 0;
+  xnap_target_ue_data_t *found = xnap_find_target_ue_by_source_id(msg.s_ng_node_ue_xnap_id, &t_xnap_ue_id);
+  if (found != NULL) {
+    xnap_ho_tgt_result_t r = xnap_ho_tgt_transition(found->sm_state, XNAP_HO_TGT_EV_HANDOVER_CANCEL);
+    if (r.action == XNAP_HO_TGT_ACT_ILLEGAL) {
+      LOG_W(XNAP, "[gNB %ld] HandoverCancel: stale/late cancel for t_xnap_ue_id %u (sm_state %d) — dropping\n",
+            instance, t_xnap_ue_id, found->sm_state);
+      return -1;
+    }
   }
 
   MessageDef *itti_msg = itti_alloc_new_message(TASK_XNAP, inst->instance, XNAP_HANDOVER_CANCEL);

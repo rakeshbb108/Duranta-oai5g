@@ -760,6 +760,71 @@ int rrc_gNB_process_XNAP_HANDOVER_PREP_FAILURE(gNB_RRC_INST *rrc, const xnap_han
   return 0;
 }
 
+/* @brief TXnRELOCprep expired before HandoverRequestAck/PreparationFailure arrived
+ * (TS 38.423 §8.2.1.2). Same local cleanup as rrc_gNB_process_XNAP_HANDOVER_PREP_FAILURE:
+ * no Prepared Handover was ever established, UE stays on source. */
+int rrc_gNB_process_XNAP_HO_RELOCPREP_TIMEOUT(gNB_RRC_INST *rrc, const xnap_ho_relocprep_timeout_t *msg)
+{
+  rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, msg->rrc_ue_id);
+  if (ue_ctx == NULL) {
+    LOG_W(NR_RRC, "Xn TXnRELOCprep timeout: unknown rrc_ue_id %u\n", msg->rrc_ue_id);
+    return -1;
+  }
+  gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
+
+  if (!UE->ho_context || !UE->ho_context->source) {
+    LOG_W(NR_RRC, "UE %u: Xn TXnRELOCprep timeout but no source handover context — dropping\n", UE->rrc_ue_id);
+    return -1;
+  }
+
+  LOG_E(NR_RRC, "UE %u: Xn TXnRELOCprep expired — HO preparation cancelled, UE stays on source\n", UE->rrc_ue_id);
+
+  nr_rrc_finalize_ho(UE);
+  return 0;
+}
+
+/* @brief TXnRELOCoverall expired before UE Context Release arrived (TS 38.423 §8.2.1.2).
+ * The UE was already told to reconfigure to the target (RRCReconfiguration was sent when
+ * the Ack was processed), so unlike prep timeout this is not "stay on source" — release
+ * locally exactly as if UE Context Release had arrived, since the source can no longer
+ * assume it is serving this UE. */
+int rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(gNB_RRC_INST *rrc, const xnap_ho_relocoverall_timeout_t *msg)
+{
+  rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, msg->rrc_ue_id);
+  if (ue_ctx == NULL) {
+    LOG_W(NR_RRC, "Xn TXnRELOCoverall timeout: unknown rrc_ue_id %u\n", msg->rrc_ue_id);
+    return -1;
+  }
+  gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
+
+  if (!UE->ho_context || !UE->ho_context->source) {
+    LOG_W(NR_RRC, "UE %u: Xn TXnRELOCoverall timeout but no source handover context — dropping\n", UE->rrc_ue_id);
+    return -1;
+  }
+
+  LOG_E(NR_RRC, "UE %u: Xn TXnRELOCoverall expired — relocation failed, releasing locally\n", UE->rrc_ue_id);
+
+  nr_rrc_finalize_ho(UE);
+
+  if (ue_associated_to_cuup(UE)) {
+    sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
+    e1ap_cause_t cause = {.type = E1AP_CAUSE_RADIO_NETWORK, .value = E1AP_RADIO_CAUSE_NORMAL_RELEASE};
+    e1ap_bearer_release_cmd_t cmd = {
+      .gNB_cu_cp_ue_id = UE->rrc_ue_id,
+      .gNB_cu_up_ue_id = UE->rrc_ue_id,
+      .cause = cause,
+    };
+    rrc->cucp_cuup.bearer_context_release(assoc_id, &cmd);
+  }
+
+  if (cu_exists_f1_ue_data(UE->rrc_ue_id) && cu_get_f1_ue_data(UE->rrc_ue_id).du_assoc_id != 0)
+    rrc_gNB_generate_RRCRelease(rrc, UE);
+  else
+    rrc_remove_ue(rrc, ue_ctx);
+
+  return 0;
+}
+
 /* @brief Target gNB processes Handover Cancel from the source gNB.
  * Two cases: after the HandoverRequestAck was sent, the UE is resolved through the
  * target UE mapping (created at Ack generation); before that, no mapping exists and

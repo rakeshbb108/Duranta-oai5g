@@ -578,8 +578,10 @@ int main( int argc, char **argv ) {
   // (may be overwritten in configuration file or command line)
   void nr_pdcp_ms_tick(void);
   void x2ap_ms_tick();
+  void xnap_ms_tick(void);
+  int is_xnap_enabled(void);
   void nr_rlc_ms_tick(void);
-  time_manager_tick_function_t tick_functions[3];
+  time_manager_tick_function_t tick_functions[4];
   int tick_functions_count = 0;
   if (NODE_IS_MONOLITHIC(node_type)) {
     /* monolithic */
@@ -588,12 +590,16 @@ int main( int argc, char **argv ) {
     /* x2ap is enabled when in NSA mode */
     if (get_softmodem_params()->nsa)
       tick_functions[tick_functions_count++] = x2ap_ms_tick;
+    if (is_xnap_enabled())
+      tick_functions[tick_functions_count++] = xnap_ms_tick;
   } else if (NODE_IS_CU(node_type)) {
      /* CU */
     tick_functions[tick_functions_count++] = nr_pdcp_ms_tick;
     /* x2ap is enabled when in NSA mode */
     if (get_softmodem_params()->nsa)
       tick_functions[tick_functions_count++] = x2ap_ms_tick;
+    if (is_xnap_enabled())
+      tick_functions[tick_functions_count++] = xnap_ms_tick;
   } else {
      /* DU */
     tick_functions[tick_functions_count++] = nr_rlc_ms_tick;

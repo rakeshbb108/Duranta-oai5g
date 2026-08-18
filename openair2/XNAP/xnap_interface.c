@@ -84,6 +84,9 @@ xnap_net_config_t Read_IPconfig_Xn(uint32_t gnb_idx)
 
   nc.gnb_xn_interface_ip_address = strdup(*(XnParams[GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNC_IDX].strptr));
 
+  nc.t_xn_reloc_prep_ms    = *(XnParams[GNB_CONFIG_STRING_T_XN_RELOC_PREP_IDX].uptr);
+  nc.t_xn_reloc_overall_ms = *(XnParams[GNB_CONFIG_STRING_T_XN_RELOC_OVERALL_IDX].uptr);
+
   nc.sctp_streams.sctp_out_streams = SCTP_OUT_STREAMS;
   nc.sctp_streams.sctp_in_streams = SCTP_IN_STREAMS;
 

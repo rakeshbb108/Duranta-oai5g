@@ -3951,6 +3951,14 @@ void *rrc_gnb_task(void *args_p)
         rrc_gNB_process_XNAP_HANDOVER_CANCEL(RC.nrrrc[instance], &XNAP_HANDOVER_CANCEL(msg_p));
         break;
 
+      case XNAP_HO_RELOCPREP_TIMEOUT:
+        rrc_gNB_process_XNAP_HO_RELOCPREP_TIMEOUT(RC.nrrrc[instance], &XNAP_HO_RELOCPREP_TIMEOUT(msg_p));
+        break;
+
+      case XNAP_HO_RELOCOVERALL_TIMEOUT:
+        rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(RC.nrrrc[instance], &XNAP_HO_RELOCOVERALL_TIMEOUT(msg_p));
+        break;
+
       case GTPV1U_XNU_FORWARDING_COMPLETE:
         rrc_gNB_process_XNU_FORWARDING_COMPLETE(RC.nrrrc[instance], &GTPV1U_XNU_FORWARDING_COMPLETE(msg_p));
         break;

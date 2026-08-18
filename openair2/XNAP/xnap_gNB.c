@@ -10,6 +10,8 @@
 #include "lib/xnap_gNB_interface_management.h"
 #include "lib/xnap_gNB_mobility_management.h"
 #include "xnap_ids.h"
+#include "xnap_ho_sm.h"
+#include "xnap_ho_timers.h"
 #include "xnap_gNB_encoder.h"
 #include "common/utils/LOG/log.h"
 #include "common/platform_types.h"
@@ -72,10 +74,13 @@ static void xnap_gNB_generate_handover_request_acknowledge(instance_t instance,
     return;
   }
 
-  /* Record the target rrc_ue_id mapping under the RRC-allocated t_ng_node_ue_xnap_id */
+  /* Record the target rrc_ue_id mapping under the RRC-allocated t_ng_node_ue_xnap_id.
+   * sm_state tracking starts here (HO_REQ_ACK_SENT) — no early allocation of
+   * t_ng_node_ue_xnap_id means admission control (pre-Ack) stays untracked. */
   xnap_target_ue_data_t ue_data = {.rrc_ue_id = ack->rrc_ue_id,
                                    .source_assoc_id = ack->source_assoc_id,
-                                   .s_ng_node_ue_xnap_id = ack->s_ng_node_ue_xnap_id};
+                                   .s_ng_node_ue_xnap_id = ack->s_ng_node_ue_xnap_id,
+                                   .sm_state = XNAP_HO_TGT_HO_REQ_ACK_SENT};
   bool ok = xnap_add_target_ue_data(ack->t_ng_node_ue_xnap_id, &ue_data);
   AssertFatal(ok, "[gNB %ld] Failed to store target UE data for t_xnap_ue_id %u\n",
               instance, ack->t_ng_node_ue_xnap_id);
@@ -116,12 +121,17 @@ static void xnap_gNB_generate_handover_request(instance_t instance, xnap_handove
   }
 
   /* Record the rrc_ue_id mapping under the RRC-allocated s_ng_node_ue_xnap_id so
-   * incoming HandoverRequestAck / Failure can be routed back to the right UE */
+   * incoming HandoverRequestAck / Failure can be routed back to the right UE.
+   * sm_state starts at HO_REQ_SENT directly (TS 38.423 §8.2.1.2): there is no
+   * persisted "XN_READY" entry to transition from, this IS the entry's creation. */
   xnap_ue_data_t ue_data = {.rrc_ue_id = req->rrc_ue_id,
                             .target_assoc_id = req->target_assoc_id,
-                            .t_ng_node_ue_xnap_id = -1};
+                            .t_ng_node_ue_xnap_id = -1,
+                            .sm_state = XNAP_HO_SRC_HO_REQ_SENT};
+  xnap_ho_src_set_relocprep_start(&ue_data.timer_marks, xnap_ho_timers_now());
   bool ok = xnap_add_ue_data(req->s_ng_node_ue_xnap_id, &ue_data);
   AssertFatal(ok, "[gNB %ld] Failed to store UE data for xnap_ue_id %u\n", instance, req->s_ng_node_ue_xnap_id);
+  xnap_ho_timer_track(req->s_ng_node_ue_xnap_id);
 
   XNAP_XnAP_PDU_t *pdu = encode_xnap_handover_request(req);
   AssertFatal(pdu != NULL, "[gNB %ld] encode_xnap_handover_request() failed\n", instance);
@@ -211,6 +221,7 @@ static void xnap_gNB_generate_sn_status_transfer(instance_t instance, xnap_sn_st
 static void xnap_gNB_handle_register_gnb(instance_t instance, xnap_register_gnb_req_t *req)
 {
   createXninst(instance, &req->setup_info, &req->net_config);
+  xnap_ho_timers_init(req->net_config.t_xn_reloc_prep_ms, req->net_config.t_xn_reloc_overall_ms);
 
   xnap_gnb_inst_t *inst = getCxtXn(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found after creation\n", instance);
@@ -240,6 +251,13 @@ static void xnap_gNB_generate_ue_context_release(instance_t instance, xnap_ue_co
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
   xnap_target_ue_data_t tgt_data = xnap_get_target_ue_data(msg->t_ng_node_ue_xnap_id);
+  /* RRCReconfigurationComplete / NG Path Switch are RRC/NGAP-domain events
+   * XNAP never observes (see xnap_ho_sm.h — neither carries an XnAP timer),
+   * so this jumps HO_REQ_ACK_SENT straight to UE_CTXT_REL_SENT without the
+   * intermediate UE_ARRIVED_PATH_SWITCHING hop xnap_ho_tgt_transition() would
+   * otherwise require; set directly rather than through the transition table. */
+  xnap_set_target_ue_sm_state(msg->t_ng_node_ue_xnap_id, XNAP_HO_TGT_UE_CTXT_REL_SENT);
+
   xnap_peer_t *peer = getXnPeerByAssoc(inst, tgt_data.source_assoc_id);
   if (peer == NULL) {
     LOG_E(XNAP, "[gNB %ld] UE Context Release: no peer for source_assoc_id %d\n",
@@ -469,6 +487,19 @@ static void xnap_gNB_handle_sctp_data_ind(instance_t instance, sctp_data_ind_t *
   itti_free(TASK_UNKNOWN, ind->buffer);
 }
 
+/* Driven by the shared common/utils/time_manager clock, once per (real or
+ * simulated) millisecond — same pattern as X2AP's x2ap_ms_tick()/
+ * X2AP_SUBFRAME_PROCESS. Registered into time_manager's tick_functions[] in
+ * nr-softmodem.c, gated on is_xnap_enabled(). Keeps the two source-side Xn HO
+ * guard timers on the same clock as X2AP's/PDCP's/RLC's own timers, so they
+ * stay correct under the iq_samples time source (rfsim running non-realtime),
+ * not just under the wall clock. */
+void xnap_ms_tick(void)
+{
+  MessageDef *msg = itti_alloc_new_message(TASK_XNAP, 0, XNAP_HO_TIMER_TICK);
+  itti_send_msg_to_task(TASK_XNAP, 0, msg);
+}
+
 void *xnap_task(void *args)
 {
   UNUSED(args);
@@ -484,6 +515,10 @@ void *xnap_task(void *args)
     LOG_D(XNAP, "XnAP received %s for instance %ld\n", ITTI_MSG_NAME(msg), instance);
 
     switch (msgType) {
+      case XNAP_HO_TIMER_TICK:
+        xnap_check_ho_timers(instance);
+        break;
+
       case XNAP_REGISTER_GNB_REQ:
         xnap_gNB_handle_register_gnb(instance, &XNAP_REGISTER_GNB_REQ(msg));
         break;

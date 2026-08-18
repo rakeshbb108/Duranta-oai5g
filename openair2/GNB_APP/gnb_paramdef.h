@@ -833,6 +833,8 @@ typedef enum {
 #define GNB_CONFIG_STRING_GNB_PORT_FOR_XNC_IDX     2
 #define GNB_CONFIG_STRING_GNB_PORT_FOR_XNU_IDX     3
 #define GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNU_IDX  4
+#define GNB_CONFIG_STRING_T_XN_RELOC_PREP_IDX      5
+#define GNB_CONFIG_STRING_T_XN_RELOC_OVERALL_IDX   6
 
 /* XnAP configuration parameter names */
 #define GNB_CONFIG_STRING_XNAP_ENABLE              "ENABLE_XN_INTERFACE"
@@ -840,6 +842,15 @@ typedef enum {
 #define GNB_CONFIG_STRING_GNB_PORT_FOR_XNC         "GNB_PORT_FOR_XNC"
 #define GNB_CONFIG_STRING_GNB_PORT_FOR_XNU         "GNB_PORT_FOR_XNU"
 #define GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNU      "GNB_IP_ADDRESS_FOR_XNU"
+#define GNB_CONFIG_STRING_T_XN_RELOC_PREP          "T_XN_RELOC_PREP_MS"
+#define GNB_CONFIG_STRING_T_XN_RELOC_OVERALL       "T_XN_RELOC_OVERALL_MS"
+
+/* TXnRELOCprep/TXnRELOCoverall (TS 38.423 §8.2.1.2) default durations, ms: this
+ * deployment's Xn HO typically completes in 70-120ms end-to-end, so 400/800ms
+ * gives a several-x safety margin without leaving a stuck UE/context around
+ * for long on a genuine failure. */
+#define GNB_CONFIG_T_XN_RELOC_PREP_DEFAULT_MS      400
+#define GNB_CONFIG_T_XN_RELOC_OVERALL_DEFAULT_MS   800
 
 #define XnPARAMS_DESC { \
   { GNB_CONFIG_STRING_XNAP_ENABLE,         "Enable or disable Xn interface support",                    PARAMFLAG_BOOL, .iptr=NULL,   .defintval=0,    TYPE_INT,    0 }, \
@@ -847,6 +858,8 @@ typedef enum {
   { GNB_CONFIG_STRING_GNB_PORT_FOR_XNC,    "Local SCTP port used for Xn signalling",                    0,              .uptr=NULL,   .defintval=0L,   TYPE_UINT,   0 }, \
   { GNB_CONFIG_STRING_GNB_PORT_FOR_XNU,    "Local UDP port used for the Xn-U GTP-U endpoint",           0,              .uptr=NULL,   .defintval=2152L, TYPE_UINT,   0 }, \
   { GNB_CONFIG_STRING_GNB_IP_ADDR_FOR_XNU, "Local gNB IP address used for the Xn-U GTP-U endpoint",     0,              .strptr=NULL, .defstrval=NULL, TYPE_STRING, 0 }, \
+  { GNB_CONFIG_STRING_T_XN_RELOC_PREP,     "TXnRELOCprep guard timer duration (ms)",                    0,              .uptr=NULL,   .defintval=GNB_CONFIG_T_XN_RELOC_PREP_DEFAULT_MS,    TYPE_UINT, 0 }, \
+  { GNB_CONFIG_STRING_T_XN_RELOC_OVERALL,  "TXnRELOCoverall guard timer duration (ms)",                 0,              .uptr=NULL,   .defintval=GNB_CONFIG_T_XN_RELOC_OVERALL_DEFAULT_MS, TYPE_UINT, 0 }, \
 }
 
 /* Xn Sub Section: Candidates configuration */

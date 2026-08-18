@@ -25,6 +25,12 @@ int rrc_gNB_process_XNAP_HANDOVER_PREP_FAILURE(gNB_RRC_INST *rrc, const xnap_han
 
 int rrc_gNB_process_XNAP_HANDOVER_CANCEL(gNB_RRC_INST *rrc, const xnap_handover_cancel_t *msg);
 
+/* TXnRELOCprep/TXnRELOCoverall expired at the source's XNAP layer (xnap_ho_timers.c) before
+ * the corresponding Xn message arrived; XNAP already sent HandoverCancel over Xn on its own,
+ * these just drive the same local cleanup RRC already does for a real Xn message. */
+int rrc_gNB_process_XNAP_HO_RELOCPREP_TIMEOUT(gNB_RRC_INST *rrc, const xnap_ho_relocprep_timeout_t *msg);
+int rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(gNB_RRC_INST *rrc, const xnap_ho_relocoverall_timeout_t *msg);
+
 void rrc_gNB_xn_ho_target_abort(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const char *why);
 
 void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handover_req_ack_t *msg);
