@@ -1128,10 +1128,11 @@ int gtpv1u_update_ue_id(const instance_t instanceP, ue_id_t old_ue_id, ue_id_t n
     return GTPNOK;
   }
 
-  for (unsigned i = 0; i < it->second.bearers.size(); ++i) {
-    teid_t incoming_teid = inst->ue2te_mapping[old_ue_id].bearers[i].teid_incoming;
-    if (globGtp.te2ue_mapping[incoming_teid].ue_id == old_ue_id) {
-      globGtp.te2ue_mapping[incoming_teid].ue_id = new_ue_id;
+  for (const auto &b : it->second.bearers) {
+    teid_t incoming_teid = b.second.teid_incoming;
+    auto teid_it = globGtp.te2ue_mapping.find(incoming_teid);
+    if (teid_it != globGtp.te2ue_mapping.end() && teid_it->second.ue_id == old_ue_id) {
+      teid_it->second.ue_id = new_ue_id;
     }
   }
 
