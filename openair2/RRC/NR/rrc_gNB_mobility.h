@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include "common/utils/ds/byte_array.h"
+#include "common/utils/xn_ho_latency.h"
 #include "nr_rrc_defs.h"
 
 RB_PROTOTYPE(rrc_xn_cand_tree, rrc_xn_candidate_s, entry, rrc_xn_candidate_cmp);
@@ -46,6 +47,14 @@ typedef struct nr_ho_source_cu {
   ho_status_transfer_t ho_status_transfer;
   /// old (source) downlink tunnel
   gtpu_tunnel_t old_du_tunnel_config;
+  /* Xn HO latency instrumentation (see common/utils/xn_ho_latency.h); XnAP ids are CSV labels only */
+  bool is_xn;
+  uint32_t neighbour_pci;
+  uint32_t lat_s_xnap_id, lat_t_xnap_id;
+  xn_ho_ts_t lat_t0, lat_t1, lat_t2, lat_t3, lat_t7;
+  int lat_n_drb;
+  int lat_drb_ids[MAX_DRBS_PER_UE];
+  uint32_t lat_dl_count_sn[MAX_DRBS_PER_UE];
 } nr_ho_source_cu_t;
 
 /* acknowledgement of handover request. buf+len is the RRC Reconfiguration */
@@ -83,6 +92,10 @@ typedef struct nr_ho_target_cu {
   /// Xn only: source DRBs not kept, to release in the HO command
   int n_src_drb_rel;
   int src_drb_rel[MAX_DRBS_PER_UE];
+  /* Xn HO latency instrumentation (see common/utils/xn_ho_latency.h); XnAP ids are CSV labels only */
+  bool is_xn;
+  uint32_t lat_s_xnap_id, lat_t_xnap_id;
+  xn_ho_ts_t lat_t4, lat_t5, lat_t6, lat_t7;
 } nr_ho_target_cu_t;
 
 typedef struct nr_handover_context_s {
