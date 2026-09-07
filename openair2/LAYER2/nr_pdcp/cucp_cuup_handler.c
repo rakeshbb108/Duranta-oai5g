@@ -611,10 +611,13 @@ static void remove_ue_e1(const uint32_t ue_id)
 
   instance_t n3inst = get_n3_gtp_instance();
   instance_t f1inst = get_f1_gtp_instance();
+  instance_t xnuinst = get_xnu_gtp_instance();
 
   newGtpuDeleteAllTunnels(n3inst, ue_id);
   if (f1inst >= 0)  // is there F1-U?
     newGtpuDeleteAllTunnels(f1inst, ue_id);
+  if (xnuinst >= 0)  // is there Xn-U (HO forwarding)?
+    newGtpuDeleteAllTunnels(xnuinst, ue_id);
   if (need_ue_id_mgmt) {
     // see issue #706: in monolithic, gNB will free PDCP of UE
     nr_pdcp_remove_UE(ue_id);
