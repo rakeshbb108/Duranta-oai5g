@@ -1517,6 +1517,17 @@ static E1AP_PDU_Session_Resource_To_Modify_Item_t e1_encode_pdu_session_to_mod_i
       asn1cCalloc(fwdInfo->dL_Data_Forwarding, dlFwdTnl);
       *dlFwdTnl = e1_encode_up_tnl_info(j->dl_fwd_tnl);
     }
+    // Early Data Forwarding Indicator (O, extension) — Xn HO: tell the addressed
+    // CU-UP to stop DL forwarding for this DRB (clause 9.3.1.51)
+    if (j->early_fwd_stop) {
+      E1AP_ProtocolExtensionContainer_4961P38_t *ext = calloc_or_fail(1, sizeof(*ext));
+      drb2Mod->iE_Extensions = (struct E1AP_ProtocolExtensionContainer *)ext;
+      asn1cSequenceAdd(ext->list, E1AP_DRB_To_Modify_Item_NG_RAN_ExtIEs_t, ext_ie);
+      ext_ie->id = E1AP_ProtocolIE_ID_id_EarlyDataForwardingIndicator;
+      ext_ie->criticality = E1AP_Criticality_ignore;
+      ext_ie->extensionValue.present = E1AP_DRB_To_Modify_Item_NG_RAN_ExtIEs__extensionValue_PR_EarlyDataForwardingIndicator;
+      ext_ie->extensionValue.choice.EarlyDataForwardingIndicator = E1AP_EarlyDataForwardingIndicator_stop;
+    }
     // QoS Flows to setup (O)
     for (const qos_flow_to_setup_t *k = j->qosFlows; k < j->qosFlows + j->numQosFlowsMod; k++) {
       asn1cCalloc(drb2Mod->flow_Mapping_Information, flow_Mapping_Information);
@@ -1811,6 +1822,15 @@ static bool e1_decode_pdu_session_to_mod_item(pdu_session_to_mod_t *out, const E
     if (drb2Mod->dRB_Data_Forwarding_Information && drb2Mod->dRB_Data_Forwarding_Information->dL_Data_Forwarding) {
       drb->dl_fwd_tnl = calloc_or_fail(1, sizeof(*drb->dl_fwd_tnl));
       CHECK_E1AP_DEC(e1_decode_up_tnl_info(drb->dl_fwd_tnl, drb2Mod->dRB_Data_Forwarding_Information->dL_Data_Forwarding));
+    }
+    // Early Data Forwarding Indicator (O, extension) — Xn HO: stop DL forwarding for this DRB
+    if (drb2Mod->iE_Extensions) {
+      const E1AP_ProtocolExtensionContainer_4961P38_t *ext = (const E1AP_ProtocolExtensionContainer_4961P38_t *)drb2Mod->iE_Extensions;
+      for (int e = 0; e < ext->list.count; e++) {
+        const E1AP_DRB_To_Modify_Item_NG_RAN_ExtIEs_t *ext_ie = ext->list.array[e];
+        if (ext_ie->id == E1AP_ProtocolIE_ID_id_EarlyDataForwardingIndicator)
+          drb->early_fwd_stop = true;
+      }
     }
     // QoS Flows Information To Be Setup (O)
     if (drb2Mod->flow_Mapping_Information) {
@@ -2115,6 +2135,7 @@ static bool eq_drb_to_mod(const DRB_nGRAN_to_mod_t *a, const DRB_nGRAN_to_mod_t 
     if (!eq_up_tl_info(a->dl_fwd_tnl, b->dl_fwd_tnl))
       return false;
   }
+  _EQ_CHECK_INT(a->early_fwd_stop, b->early_fwd_stop);
   return true;
 }
 
