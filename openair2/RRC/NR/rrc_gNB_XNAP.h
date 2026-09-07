@@ -8,6 +8,7 @@
 #include "nr_rrc_defs.h"
 #include "openair2/COMMON/xnap_messages_types.h"
 #include "openair2/COMMON/gtpv1_u_messages_types.h"
+#include "common/utils/xn_ho_latency.h"
 
 bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
                                         gNB_RRC_UE_t *UE,
@@ -54,5 +55,11 @@ int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
                                               xnap_ue_context_release_t *msg);
 
 void rrc_gNB_process_XNU_FORWARDING_COMPLETE(gNB_RRC_INST *rrc, const gtpv1u_xnu_forwarding_complete_t *msg);
+
+/* Xn HO latency instrumentation (common/utils/xn_ho_latency.h): append one
+ * CSV row for the current handover attempt and stop (idempotent no-op if
+ * the context isn't an Xn HO, e.g. F1/N2 handover reusing the same struct). */
+void rrc_gNB_finalize_xn_ho_latency_source(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, xn_ho_outcome_t outcome);
+void rrc_gNB_finalize_xn_ho_latency_target(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, xn_ho_outcome_t outcome);
 
 #endif /* RRC_GNB_XNAP_H_ */

@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include "common/utils/ds/byte_array.h"
+#include "common/utils/xn_ho_latency.h"
 #include "nr_rrc_defs.h"
 
 RB_PROTOTYPE(rrc_xn_cand_tree, rrc_xn_candidate_s, entry, rrc_xn_candidate_cmp);
@@ -49,6 +50,13 @@ typedef struct nr_ho_source_cu {
   /* Xn HO routing: set after receiving HandoverRequestAcknowledge */
   uint32_t     tar_ue_xnap_id; /* target NG-RAN node UE XnAP ID */
   sctp_assoc_t tar_assoc_id;   /* SCTP association to the target gNB */
+  /* Xn HO latency instrumentation (see common/utils/xn_ho_latency.h) */
+  bool is_xn;
+  uint32_t neighbour_pci;
+  xn_ho_ts_t lat_t0, lat_t1, lat_t2, lat_t3, lat_t7;
+  int lat_n_drb;
+  int lat_drb_ids[MAX_DRBS_PER_UE];
+  uint32_t lat_dl_count_sn[MAX_DRBS_PER_UE];
 } nr_ho_source_cu_t;
 
 /* acknowledgement of handover request. buf+len is the RRC Reconfiguration */
@@ -85,6 +93,9 @@ typedef struct nr_ho_target_cu {
   uint32_t     src_ue_xnap_id; /* source XnAP UE ID from incoming HandoverRequest */
   uint32_t     target_ue_id;   /* target XnAP UE ID, allocated when sending HandoverRequestAcknowledge */
   sctp_assoc_t source_assoc_id;       /* SCTP association back to the source gNB */
+  /* Xn HO latency instrumentation (see common/utils/xn_ho_latency.h) */
+  bool is_xn;
+  xn_ho_ts_t lat_t4, lat_t5, lat_t6, lat_t7;
 } nr_ho_target_cu_t;
 
 typedef struct nr_handover_context_s {

@@ -2257,6 +2257,9 @@ int rrc_gNB_process_NGAP_PATH_SWITCH_REQUEST_ACKNOWLEDGEMENT(gNB_RRC_INST *rrc,
   }
   gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
 
+  if (UE->ho_context && UE->ho_context->target && UE->ho_context->target->is_xn)
+    xn_ho_ts_mark(&UE->ho_context->target->lat_t6);
+
   /* Update security context */
   UE->nh_ncc = msg->nh_ncc;
   memcpy(UE->nh, msg->next_security_key, SECURITY_KEY_LENGTH);

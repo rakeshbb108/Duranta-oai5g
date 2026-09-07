@@ -2244,6 +2244,9 @@ static void handle_rrcReconfigurationComplete(gNB_RRC_INST *rrc, gNB_RRC_UE_t *U
     LOG_A(NR_RRC, "handover for UE %d/RNTI %04x complete!\n", UE->rrc_ue_id, UE->rnti);
     DevAssert(UE->ho_context->target != NULL);
 
+    if (UE->ho_context->target->is_xn)
+      xn_ho_ts_mark(&UE->ho_context->target->lat_t4);
+
     if (UE->ho_context->target->ho_success)
       UE->ho_context->target->ho_success(rrc, UE);
     /* ho_reconfig_ack: N2/F1 finalise immediately; Xn triggers Path Switch Request

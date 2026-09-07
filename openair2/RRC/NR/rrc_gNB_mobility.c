@@ -760,6 +760,7 @@ static void nr_rrc_xn_ho_acknowledge(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
  *         trigger NGAP Path Switch Request to AMF to update the data path. */
 static void nr_rrc_xn_ho_path_switch(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 {
+  xn_ho_ts_mark(&UE->ho_context->target->lat_t5);
   rrc_gNB_send_NGAP_PATH_SWITCH_REQUEST(rrc, UE);
 }
 
@@ -767,6 +768,7 @@ static void nr_rrc_xn_ho_path_switch(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
  *         initiate F1 UE Context Setup toward the target DU. */
 void nr_rrc_trigger_xn_ho_target(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue)
 {
+  ue->ho_context->target->is_xn = true;
   ho_req_ack_t ack = nr_rrc_xn_ho_acknowledge;
   ho_failure_t failure = nr_rrc_xn_ho_failure;
   /* ho_success = NULL: no immediate network announcement on RRCReconfigComplete.
@@ -838,6 +840,9 @@ void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
   ue->ho_context->source->cell = source_cell;
   ue->ho_context->source->ho_cancel = nr_rrc_xn_ho_cancel;
   ue->ho_context->source->ho_status_transfer = rrc_gNB_send_XNAP_SN_STATUS_TRANSFER;
+  ue->ho_context->source->is_xn = true;
+  ue->ho_context->source->neighbour_pci = neighbour->physicalCellId;
+  xn_ho_ts_mark(&ue->ho_context->source->lat_t0);
 
   if (!rrc_gNB_send_XNAP_HANDOVER_REQUEST(rrc, ue, neighbour, hoPrepInfo)) {
     LOG_E(NR_RRC, "UE %d: Xn HO failed — could not send HandoverRequest\n", ue->rrc_ue_id);
@@ -861,6 +866,7 @@ void nr_HO_Xn_cancel_trigger_telnet(gNB_RRC_INST *rrc, uint32_t rrc_ue_id)
   }
 
   UE->ho_context->source->ho_cancel(rrc, UE);
+  rrc_gNB_finalize_xn_ho_latency_source(rrc, UE, XN_HO_OUTCOME_CANCELLED);
   nr_rrc_finalize_ho(UE);
 }
 

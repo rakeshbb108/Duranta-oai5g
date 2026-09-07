@@ -203,6 +203,7 @@ bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
 
   LOG_I(NR_RRC, "UE %d: sending XNAP_HANDOVER_REQ to gNB_ID 0x%x (assoc_id %d) s_xnap_ue_id %u\n",
         UE->rrc_ue_id, neighbour->gNB_ID, xn->assoc_id, UE->ho_context->source->src_ue_xnap_id);
+  xn_ho_ts_mark(&UE->ho_context->source->lat_t1);
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
   return true;
 }
@@ -416,6 +417,8 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
     return;
   }
 
+  xn_ho_ts_mark(&UE->ho_context->source->lat_t2);
+
   UE->ho_context->source->tar_ue_xnap_id = msg->t_ng_node_ue_xnap_id;
   UE->ho_context->source->tar_assoc_id   = msg->source_assoc_id;
 
@@ -450,6 +453,7 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
   }
 
   rrc_gNB_trigger_reconfiguration_for_handover(rrc, UE, buffer.buf, buffer.len);
+  xn_ho_ts_mark(&UE->ho_context->source->lat_t3);
   LOG_A(NR_RRC, "Xn HO: sent RRCReconfiguration (HO Command) to UE %u/RNTI %04x\n",
         UE->rrc_ue_id, UE->rnti);
   free_byte_array(buffer);
@@ -543,6 +547,16 @@ int rrc_gNB_send_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
     item->dl_count.pdcp_sn = pdcp_status[i].dl_count.sn;
     item->dl_count.hfn     = pdcp_status[i].dl_count.hfn;
     item->dl_count.sn_len  = sn_length_18 ? XNAP_SN_LENGTH_18 : XNAP_SN_LENGTH_12;
+
+    /* Xn HO latency instrumentation: this DL COUNT is the standardised
+     * "highest assigned" boundary, reused downstream to estimate PDCP loss
+     * against the target's first-delivered SN instead of adding a parallel
+     * source-side PDCP tap. */
+    if (UE->ho_context->source->lat_n_drb < MAX_DRBS_PER_UE) {
+      int idx = UE->ho_context->source->lat_n_drb++;
+      UE->ho_context->source->lat_drb_ids[idx] = drb_id;
+      UE->ho_context->source->lat_dl_count_sn[idx] = pdcp_status[i].dl_count.sn;
+    }
   }
 
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_SN_STATUS_TRANSFER);
@@ -673,8 +687,10 @@ void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_UE_CONTEXT_RELEASE);
   XNAP_UE_CONTEXT_RELEASE(msg_p) = msg;
+  xn_ho_ts_mark(&UE->ho_context->target->lat_t7);
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
 
+  rrc_gNB_finalize_xn_ho_latency_target(rrc, UE, XN_HO_OUTCOME_SUCCESS);
   nr_rrc_finalize_ho(UE);
 }
 
@@ -707,6 +723,8 @@ int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
   LOG_I(NR_RRC, "UE %u: XNAP UE Context Release received from target — releasing source UE\n",
         UE->rrc_ue_id);
 
+  xn_ho_ts_mark(&UE->ho_context->source->lat_t7);
+  rrc_gNB_finalize_xn_ho_latency_source(rrc, UE, XN_HO_OUTCOME_SUCCESS);
   nr_rrc_finalize_ho(UE);
 
   if (ue_associated_to_cuup(UE)) {
@@ -822,6 +840,7 @@ int rrc_gNB_process_XNAP_HANDOVER_PREP_FAILURE(gNB_RRC_INST *rrc, const xnap_han
   LOG_E(NR_RRC, "UE %u: Xn Handover Preparation Failure from target (cause group %d value %d) — HO aborted, UE stays on source\n",
         UE->rrc_ue_id, msg->cause.type, msg->cause.value);
 
+  rrc_gNB_finalize_xn_ho_latency_source(rrc, UE, XN_HO_OUTCOME_PREP_FAILURE);
   nr_rrc_finalize_ho(UE);
   return 0;
 }
@@ -845,6 +864,7 @@ int rrc_gNB_process_XNAP_HO_RELOCPREP_TIMEOUT(gNB_RRC_INST *rrc, const xnap_ho_r
 
   LOG_E(NR_RRC, "UE %u: Xn TXnRELOCprep expired — HO preparation cancelled, UE stays on source\n", UE->rrc_ue_id);
 
+  rrc_gNB_finalize_xn_ho_latency_source(rrc, UE, XN_HO_OUTCOME_RELOCPREP_TIMEOUT);
   nr_rrc_finalize_ho(UE);
   return 0;
 }
@@ -870,6 +890,7 @@ int rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(gNB_RRC_INST *rrc, const xnap_h
 
   LOG_E(NR_RRC, "UE %u: Xn TXnRELOCoverall expired — relocation failed, releasing locally\n", UE->rrc_ue_id);
 
+  rrc_gNB_finalize_xn_ho_latency_source(rrc, UE, XN_HO_OUTCOME_RELOCOVERALL_TIMEOUT);
   nr_rrc_finalize_ho(UE);
 
   if (ue_associated_to_cuup(UE)) {
@@ -985,6 +1006,57 @@ void rrc_gNB_xn_ho_target_abort(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const char 
   }
 
   rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, UE->rrc_ue_id);
+  rrc_gNB_finalize_xn_ho_latency_target(rrc, UE, XN_HO_OUTCOME_TARGET_ABORT);
   nr_rrc_finalize_ho(UE);
   rrc_remove_ue(rrc, ue_ctx);
+}
+
+void rrc_gNB_finalize_xn_ho_latency_source(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, xn_ho_outcome_t outcome)
+{
+  if (!UE->ho_context || !UE->ho_context->source || !UE->ho_context->source->is_xn)
+    return;
+
+  const nr_ho_source_cu_t *src = UE->ho_context->source;
+  xn_ho_source_record_t rec = {
+    .source_gnb_id = rrc->node_id,
+    .s_xnap_id     = src->src_ue_xnap_id,
+    .t_xnap_id     = src->tar_ue_xnap_id,
+    .rrc_ue_id     = UE->rrc_ue_id,
+    .neighbour_pci = src->neighbour_pci,
+    .t0 = src->lat_t0,
+    .t1 = src->lat_t1,
+    .t2 = src->lat_t2,
+    .t3 = src->lat_t3,
+    .t7 = src->lat_t7,
+    .n_drb = src->lat_n_drb,
+    .outcome = outcome,
+  };
+  memcpy(rec.drb_ids, src->lat_drb_ids, sizeof(rec.drb_ids));
+  memcpy(rec.dl_count_sn, src->lat_dl_count_sn, sizeof(rec.dl_count_sn));
+  xn_ho_latency_append_source(&rec);
+}
+
+void rrc_gNB_finalize_xn_ho_latency_target(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, xn_ho_outcome_t outcome)
+{
+  if (!UE->ho_context || !UE->ho_context->target || !UE->ho_context->target->is_xn)
+    return;
+
+  const nr_ho_target_cu_t *tgt = UE->ho_context->target;
+  xn_ho_target_record_t rec = {
+    .target_gnb_id = rrc->node_id,
+    .s_xnap_id     = tgt->src_ue_xnap_id,
+    .t_xnap_id     = tgt->target_ue_id,
+    .rrc_ue_id     = UE->rrc_ue_id,
+    .t4 = tgt->lat_t4,
+    .t5 = tgt->lat_t5,
+    .t6 = tgt->lat_t6,
+    .t7 = tgt->lat_t7,
+    .outcome = outcome,
+  };
+
+  /* Interruption/loss data (first DL PDCP PDU delivered post-HO) is written
+   * directly by the CU-UP process to xn_ho_latency_cuup.csv, since it may be
+   * a separate process/host from this one -- joined downstream by rrc_ue_id
+   * (see ci-scripts/xn_ho/xn_ho_csv_merge.py and common/utils/xn_ho_latency.h). */
+  xn_ho_latency_append_target(&rec);
 }
