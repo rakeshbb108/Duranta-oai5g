@@ -32,6 +32,14 @@ typedef struct {
 
 void xn_ho_ts_mark(xn_ho_ts_t *ts);
 
+/* Delta in milliseconds between two marks made by the SAME process (uses
+ * CLOCK_MONOTONIC, exact regardless of wall-clock sync) -- e.g. Xn Prep
+ * (T1->T2) or Path-Switch (T5->T6). Returns -1.0 if either mark was never
+ * set (e.g. the handover failed before reaching it). NOT valid across two
+ * different processes/hosts -- see common/utils/xn_ho_latency.h's own
+ * module comment and ci-scripts/xn_ho/xn_ho_csv_merge.py for that case. */
+double xn_ho_delta_ms(xn_ho_ts_t start, xn_ho_ts_t end);
+
 typedef enum {
   XN_HO_OUTCOME_SUCCESS,
   XN_HO_OUTCOME_PREP_FAILURE,
