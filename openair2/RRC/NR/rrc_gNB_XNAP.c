@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-CSSL-1.0
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -1011,12 +1012,33 @@ void rrc_gNB_xn_ho_target_abort(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const char 
   rrc_remove_ue(rrc, ue_ctx);
 }
 
+/* format a latency delta for logging: "n/a" if the interval was never
+ * completed (e.g. handover failed before reaching the second mark) */
+static const char *fmt_ms(double v, char *buf, size_t len)
+{
+  if (v < 0)
+    snprintf(buf, len, "n/a");
+  else
+    snprintf(buf, len, "%.3f ms", v);
+  return buf;
+}
+
 void rrc_gNB_finalize_xn_ho_latency_source(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, xn_ho_outcome_t outcome)
 {
   if (!UE->ho_context || !UE->ho_context->source || !UE->ho_context->source->is_xn)
     return;
 
   const nr_ho_source_cu_t *src = UE->ho_context->source;
+
+  /* Both marks live on this (source) process, so plain CLOCK_MONOTONIC
+   * deltas are exact here -- no cross-host clock-sync caveat applies. */
+  char b1[32], b2[32];
+  LOG_A(NR_RRC,
+        "Xn HO latency [UE %u, s_xnap_id %u, %s] SOURCE: Xn Prep (Req->Ack) = %s, Trigger->CtxRelease = %s\n",
+        UE->rrc_ue_id, src->src_ue_xnap_id, xn_ho_outcome_str(outcome),
+        fmt_ms(xn_ho_delta_ms(src->lat_t1, src->lat_t2), b1, sizeof(b1)),
+        fmt_ms(xn_ho_delta_ms(src->lat_t0, src->lat_t7), b2, sizeof(b2)));
+
   xn_ho_source_record_t rec = {
     .source_gnb_id = rrc->node_id,
     .s_xnap_id     = src->src_ue_xnap_id,
@@ -1042,6 +1064,16 @@ void rrc_gNB_finalize_xn_ho_latency_target(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, 
     return;
 
   const nr_ho_target_cu_t *tgt = UE->ho_context->target;
+
+  /* Both marks live on this (target) process -- see the source-side
+   * function above for why CLOCK_MONOTONIC deltas are valid here. */
+  char b1[32], b2[32];
+  LOG_A(NR_RRC,
+        "Xn HO latency [UE %u, s_xnap_id %u, %s] TARGET: Path-Switch (Req->Ack) = %s, ReconfigComplete->CtxRelease = %s\n",
+        UE->rrc_ue_id, tgt->src_ue_xnap_id, xn_ho_outcome_str(outcome),
+        fmt_ms(xn_ho_delta_ms(tgt->lat_t5, tgt->lat_t6), b1, sizeof(b1)),
+        fmt_ms(xn_ho_delta_ms(tgt->lat_t4, tgt->lat_t7), b2, sizeof(b2)));
+
   xn_ho_target_record_t rec = {
     .target_gnb_id = rrc->node_id,
     .s_xnap_id     = tgt->src_ue_xnap_id,

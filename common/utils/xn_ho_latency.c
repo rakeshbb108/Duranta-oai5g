@@ -20,6 +20,13 @@ void xn_ho_ts_mark(xn_ho_ts_t *ts)
   ts->set = true;
 }
 
+double xn_ho_delta_ms(xn_ho_ts_t start, xn_ho_ts_t end)
+{
+  if (!start.set || !end.set)
+    return -1.0;
+  return (double) (end.mono_ns - start.mono_ns) / 1e6;
+}
+
 const char *xn_ho_outcome_str(xn_ho_outcome_t o)
 {
   switch (o) {

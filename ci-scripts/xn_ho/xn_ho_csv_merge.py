@@ -17,10 +17,14 @@ process's output but still two separate files -- pass both.
 Join keys:
   - source <-> target: s_xnap_id (the source NG-RAN node UE XnAP ID),
     allocated by the source and carried in every XNAP message of the
-    procedure -- already unique per concurrent handover in a two-gNB
-    testbed. A multi-gNB deployment with more than one possible source for
-    a given target would need a wider key (not needed for this testbed);
-    this is a known limitation, not a bug.
+    procedure. This id is a per-gNB, per-role counter, so in a ping-pong
+    test (gNB A is source in round 1, target in round 2) gNB A's OWN
+    source.csv and target.csv rows can end up sharing an s_xnap_id purely
+    by coincidence -- those are never the same handover (a real Xn HO
+    always crosses two different gNBs), so a candidate is only accepted if
+    its target_gnb_id differs from the source row's source_gnb_id. Pass
+    every gNB's source.csv and target.csv (--source/--target take one or
+    more paths) and the script does this matching across all of them.
   - target <-> cuup: rrc_ue_id. CU-UP's own ue_id is always identical to the
     target CU-CP's rrc_ue_id (CU-CP sets gNB_cu_cp_ue_id = UE->rrc_ue_id in
     the E1AP Bearer Context Setup Request, and CU-UP mirrors it verbatim as
@@ -34,10 +38,11 @@ same constraint as this project's existing wall_clock log-based tooling.
 Xn Prep (T2-T1) and Path-Switch (T6-T5) are single-process intervals,
 computed from CLOCK_MONOTONIC (mono_ns) and exact regardless of clock sync.
 
-Usage:
-  ./xn_ho_csv_merge.py --source xn_ho_latency_source.csv \
-      --target xn_ho_latency_target.csv \
-      --cuup xn_ho_latency_cuup.csv \
+Usage (two-gNB ping-pong, one source/target/cuup file collected from each):
+  ./xn_ho_csv_merge.py \
+      --source gnb1_xn_ho_latency_source.csv gnb2_xn_ho_latency_source.csv \
+      --target gnb1_xn_ho_latency_target.csv gnb2_xn_ho_latency_target.csv \
+      --cuup   gnb1_xn_ho_latency_cuup.csv   gnb2_xn_ho_latency_cuup.csv \
       --out paper/results/xn_ho_latency.csv
 """
 import argparse
@@ -166,17 +171,27 @@ def stats(values):
     }
 
 
+def read_many(paths):
+    rows = []
+    for p in paths or []:
+        rows.extend(read_rows(p))
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--source", required=True, help="source gNB xn_ho_latency_source.csv")
-    ap.add_argument("--target", required=True, help="target gNB xn_ho_latency_target.csv")
-    ap.add_argument("--cuup", help="target's CU-UP xn_ho_latency_cuup.csv (optional; enables interruption/loss)")
+    ap.add_argument("--source", required=True, nargs="+",
+                     help="one or more xn_ho_latency_source.csv files, one per gNB that ever acted as source")
+    ap.add_argument("--target", required=True, nargs="+",
+                     help="one or more xn_ho_latency_target.csv files, one per gNB that ever acted as target")
+    ap.add_argument("--cuup", nargs="+",
+                     help="one or more target-CU-UP xn_ho_latency_cuup.csv files (optional; enables interruption/loss)")
     ap.add_argument("--out", required=True, help="merged per-HO CSV output path (e.g. paper/results/xn_ho_latency.csv)")
     args = ap.parse_args()
 
-    source_rows = read_rows(args.source)
-    target_rows = read_rows(args.target)
-    cuup_rows = read_rows(args.cuup) if args.cuup else []
+    source_rows = read_many(args.source)
+    target_rows = read_many(args.target)
+    cuup_rows = read_many(args.cuup)
 
     target_by_sid = {}
     for t in target_rows:
@@ -188,8 +203,15 @@ def main():
 
     merged = []
     for src in source_rows:
+        # A given gNB's own s_xnap_id counter resets/restarts independently per
+        # role, so in a ping-pong test (gNB A source in round 1, target in
+        # round 2) the SAME gNB can produce a source row and a target row that
+        # share an s_xnap_id purely by coincidence -- those two are never the
+        # same handover (a real Xn HO always crosses two different gNBs), so
+        # any same-gNB candidate is rejected before picking a match.
         candidates = target_by_sid.get(src["s_xnap_id"], [])
-        tgt = candidates.pop(0) if candidates else None
+        match_idx = next((i for i, t in enumerate(candidates) if t.get("target_gnb_id") != src.get("source_gnb_id")), None)
+        tgt = candidates.pop(match_idx) if match_idx is not None else None
         this_cuup_rows = cuup_by_ue.get(tgt["rrc_ue_id"], []) if tgt else []
         merged.append(merge_row(src, tgt, this_cuup_rows))
 
