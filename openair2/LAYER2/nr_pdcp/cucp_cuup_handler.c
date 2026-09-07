@@ -395,6 +395,8 @@ static void release_f1_drbs(uint32_t ue_id, int pdusession_id)
   }
 }
 
+static void e1_remove_xnu_tunnel(uint32_t ue_id, int drb_id);
+
 /**
  * @brief Fill Bearer Context Modification Response and send to callback
  */
@@ -542,6 +544,11 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
                              is_sn_len_18 ? LONG_SN_SIZE : SHORT_SN_SIZE);
       }
 
+      // Early Data Forwarding Indicator: stop Xn HO DL forwarding for this DRB now
+      // (TS 38.463 clause 9.3.1.51), instead of waiting for UE Context Release
+      if (to_modif->early_fwd_stop)
+        e1_remove_xnu_tunnel(req->gNB_cu_up_ue_id, to_modif->id);
+
       if (f1inst < 0) // no F1-U?
         continue; // nothing to do
 
@@ -651,13 +658,11 @@ void e1_reset(void)
   }
 }
 
-void e1_remove_xnu_tunnels(uint32_t ue_id, int n_drb, int *drb_ids)
+static void e1_remove_xnu_tunnel(uint32_t ue_id, int drb_id)
 {
   instance_t xnuinst = get_xnu_gtp_instance();
   if (xnuinst < 0)
     return;
-  for (int i = 0; i < n_drb; i++) {
-    LOG_I(GTPU, "UE %u: removing Xn-U forwarding tunnel rb_id=%d\n", ue_id, drb_ids[i]);
-    newGtpuDeleteOneTunnel(xnuinst, ue_id, drb_ids[i]);
-  }
+  LOG_I(GTPU, "UE %u: removing Xn-U forwarding tunnel rb_id=%d\n", ue_id, drb_id);
+  newGtpuDeleteOneTunnel(xnuinst, ue_id, drb_id);
 }

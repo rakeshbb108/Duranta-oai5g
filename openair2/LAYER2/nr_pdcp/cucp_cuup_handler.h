@@ -18,6 +18,4 @@ void e1_bearer_context_modif(const struct e1ap_bearer_mod_req_s *req);
 void e1_bearer_release_cmd(const struct e1ap_bearer_release_cmd_s *cmd);
 void e1_reset(void);
 
-void e1_remove_xnu_tunnels(uint32_t ue_id, int n_drb, int *drb_ids);
-
 #endif /* CUCP_CUUP_HANDLER_H */

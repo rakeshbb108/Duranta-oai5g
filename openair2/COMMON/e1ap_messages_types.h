@@ -402,6 +402,10 @@ typedef struct DRB_nGRAN_to_modify_s {
   qos_flow_to_setup_t qosFlows[E1AP_MAX_NUM_QOS_FLOWS];
   // Per-DRB DL data forwarding tunnel for Xn HO (source sets the target CU-UP endpoint)
   UP_TL_information_t *dl_fwd_tnl;
+  // Early Data Forwarding Indicator (O) (clause 9.3.1.51): target tells its own
+  // CU-UP to stop DL forwarding for this DRB (Xn HO forwarding-receive tunnel),
+  // e.g. once the GTP-U End Marker has been relayed. TS 38.463 EarlyDataForwardingIndicator.
+  bool early_fwd_stop;
 } DRB_nGRAN_to_mod_t;
 
 /* DRB To Remove Item (NG-RAN) clause 9.3.1.11 */
