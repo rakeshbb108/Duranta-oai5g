@@ -25,7 +25,6 @@
 #include "assertions.h"
 #include "openair2/F1AP/f1ap_ids.h"
 #include "openair2/XNAP/xnap_ids.h"
-#include "openair2/LAYER2/nr_pdcp/cucp_cuup_handler.h"
 #include "common/platform_constants.h"
 #include "intertask_interface.h"
 #include "aper_encoder.h"
@@ -599,6 +598,51 @@ int rrc_gNB_process_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
   return 0;
 }
 
+/** @brief Tell this UE's associated CU-UP to stop DL forwarding on Xn-U for the given DRBs
+ *  (TS 38.463 Early Data Forwarding Indicator extension, clause 9.3.1.51), grouped by PDU
+ *  session into one Bearer Context Modification Request. Routed over real E1AP so this works
+ *  across a split CU-CP/CU-UP deployment, unlike a local-only GTP-U tunnel deletion call. */
+static void rrc_gNB_stop_xnu_forwarding(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const int *drb_ids, int n_drb)
+{
+  if (n_drb == 0 || !ue_associated_to_cuup(UE))
+    return;
+
+  e1ap_bearer_mod_req_t req = {
+      .gNB_cu_cp_ue_id = UE->rrc_ue_id,
+      .gNB_cu_up_ue_id = UE->rrc_ue_id,
+  };
+  req.pduSessionMod = calloc_or_fail(n_drb, sizeof(*req.pduSessionMod));
+  for (int i = 0; i < n_drb; i++) {
+    rrc_pdu_session_param_t *p = find_pduSession_from_drbId(UE, drb_ids[i]);
+    if (p == NULL) {
+      LOG_W(NR_RRC, "UE %u: no PDU session found for DRB %d, cannot stop Xn-U forwarding\n", UE->rrc_ue_id, drb_ids[i]);
+      continue;
+    }
+    int pdu_id = p->param.pdusession_id;
+    pdu_session_to_mod_t *pdu_mod = NULL;
+    for (int j = 0; j < req.numPDUSessionsMod; j++) {
+      if (req.pduSessionMod[j].sessionId == pdu_id) {
+        pdu_mod = &req.pduSessionMod[j];
+        break;
+      }
+    }
+    if (!pdu_mod) {
+      pdu_mod = &req.pduSessionMod[req.numPDUSessionsMod++];
+      pdu_mod->sessionId = pdu_id;
+    }
+    DevAssert(pdu_mod->numDRB2Modify < E1AP_MAX_NUM_DRBS);
+    pdu_mod->DRBnGRanModList[pdu_mod->numDRB2Modify++] = (DRB_nGRAN_to_mod_t){
+        .id = drb_ids[i],
+        .early_fwd_stop = true,
+    };
+  }
+  if (req.numPDUSessionsMod > 0) {
+    sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
+    rrc->cucp_cuup.bearer_context_mod(assoc_id, &req);
+  }
+  free_e1ap_context_mod_request(&req);
+}
+
 void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 {
   AssertFatal(UE->ho_context != NULL, "UE %u: ho_context is NULL\n", UE->rrc_ue_id);
@@ -620,8 +664,7 @@ void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
       break;
     xnu_drb_ids[n_xnu++] = drb->drb_id;
   }
-  if (n_xnu > 0)
-    e1_remove_xnu_tunnels(UE->rrc_ue_id, n_xnu, xnu_drb_ids);
+  rrc_gNB_stop_xnu_forwarding(rrc, UE, xnu_drb_ids, n_xnu);
 
   xnap_ue_context_release_t msg = {
     .s_ng_node_ue_xnap_id = UE->ho_context->target->src_ue_xnap_id,
@@ -690,7 +733,12 @@ int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
  *  Context Release. The source's N3-side forwarding tunnel is shared per PDU session, so a
  *  path-switch on the core side can legitimately emit one End Marker per QoS flow — release
  *  is scoped to msg->rb_id so a second, redundant notification for the same DRB just no-ops
- *  in e1_remove_xnu_tunnels()/newGtpuDeleteOneTunnel() instead of re-touching every DRB. */
+ *  at the CU-UP instead of re-touching every DRB.
+ *
+ *  Sent to the target's own CU-UP as an E1AP Bearer Context Modification Request carrying
+ *  the Early Data Forwarding Indicator extension (TS 38.463 clause 9.3.1.51) on the DRB To
+ *  Modify Item, so this works across a split CU-CP/CU-UP deployment (a local-only call
+ *  cannot reach the CU-UP's GTP-U state when it runs in a separate process). */
 void rrc_gNB_process_XNU_FORWARDING_COMPLETE(gNB_RRC_INST *rrc, const gtpv1u_xnu_forwarding_complete_t *msg)
 {
   rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, msg->ue_id);
@@ -708,14 +756,32 @@ void rrc_gNB_process_XNU_FORWARDING_COMPLETE(gNB_RRC_INST *rrc, const gtpv1u_xnu
     return;
   }
 
+  if (!ue_associated_to_cuup(UE)) {
+    LOG_W(NR_RRC, "UE %u: Xn-U forwarding complete for DRB %d, but no CU-UP associated\n", UE->rrc_ue_id, msg->rb_id);
+    return;
+  }
+
   LOG_I(NR_RRC,
         "UE %u: Xn-U DL forwarding complete for DRB %d (PDU session %d) — releasing tunnel\n",
         UE->rrc_ue_id,
         msg->rb_id,
         msg->pdusession_id);
 
-  int drb_id = msg->rb_id;
-  e1_remove_xnu_tunnels(UE->rrc_ue_id, 1, &drb_id);
+  e1ap_bearer_mod_req_t req = {
+      .gNB_cu_cp_ue_id = UE->rrc_ue_id,
+      .gNB_cu_up_ue_id = UE->rrc_ue_id,
+      .numPDUSessionsMod = 1,
+  };
+  req.pduSessionMod = calloc_or_fail(1, sizeof(*req.pduSessionMod));
+  req.pduSessionMod[0].sessionId = msg->pdusession_id;
+  req.pduSessionMod[0].numDRB2Modify = 1;
+  req.pduSessionMod[0].DRBnGRanModList[0] = (DRB_nGRAN_to_mod_t){
+      .id = msg->rb_id,
+      .early_fwd_stop = true,
+  };
+  sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
+  rrc->cucp_cuup.bearer_context_mod(assoc_id, &req);
+  free_e1ap_context_mod_request(&req);
 }
 
 /** @brief Send Handover Preparation Failure (TS 38.423 §9.1.1.3) from target to source via Xn. */
@@ -894,8 +960,7 @@ void rrc_gNB_xn_ho_target_abort(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const char 
       break;
     xnu_drb_ids[n_xnu++] = drb->drb_id;
   }
-  if (n_xnu > 0)
-    e1_remove_xnu_tunnels(UE->rrc_ue_id, n_xnu, xnu_drb_ids);
+  rrc_gNB_stop_xnu_forwarding(rrc, UE, xnu_drb_ids, n_xnu);
 
   if (ue_associated_to_cuup(UE)) {
     sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
