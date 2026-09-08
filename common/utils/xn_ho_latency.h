@@ -32,6 +32,16 @@ typedef struct {
 
 void xn_ho_ts_mark(xn_ho_ts_t *ts);
 
+/* Like xn_ho_ts_mark(), but also prints the mark to the gNB's own log
+ * (LOG_A, component NR_RRC) with a human-readable UTC timestamp -- so each
+ * T0-T7 event is visible directly in the console/log even if the CSV
+ * pipeline is unavailable or broken, and latencies can be computed by hand
+ * from the printed wall-clock times. `event` is a short label such as
+ * "T1 HandoverRequest sent"; `xnap_id` is the XnAP UE ID if already
+ * allocated at this point, else 0 (e.g. at T0, before the source allocates
+ * its s_ng_node_ue_xnap_id). */
+void xn_ho_ts_mark_and_log(xn_ho_ts_t *ts, const char *event, uint32_t rrc_ue_id, uint32_t xnap_id);
+
 /* Delta in milliseconds between two marks made by the SAME process (uses
  * CLOCK_MONOTONIC, exact regardless of wall-clock sync) -- e.g. Xn Prep
  * (T1->T2) or Path-Switch (T5->T6). Returns -1.0 if either mark was never

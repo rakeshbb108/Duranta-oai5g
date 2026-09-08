@@ -2245,7 +2245,7 @@ static void handle_rrcReconfigurationComplete(gNB_RRC_INST *rrc, gNB_RRC_UE_t *U
     DevAssert(UE->ho_context->target != NULL);
 
     if (UE->ho_context->target->is_xn)
-      xn_ho_ts_mark(&UE->ho_context->target->lat_t4);
+      xn_ho_ts_mark_and_log(&UE->ho_context->target->lat_t4, "T4 UE RA+ReconfigurationComplete", UE->rrc_ue_id, UE->ho_context->target->src_ue_xnap_id);
 
     if (UE->ho_context->target->ho_success)
       UE->ho_context->target->ho_success(rrc, UE);

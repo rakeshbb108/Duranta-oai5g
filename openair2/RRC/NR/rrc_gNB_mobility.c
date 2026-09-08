@@ -760,7 +760,7 @@ static void nr_rrc_xn_ho_acknowledge(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
  *         trigger NGAP Path Switch Request to AMF to update the data path. */
 static void nr_rrc_xn_ho_path_switch(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 {
-  xn_ho_ts_mark(&UE->ho_context->target->lat_t5);
+  xn_ho_ts_mark_and_log(&UE->ho_context->target->lat_t5, "T5 PathSwitchRequest sent", UE->rrc_ue_id, UE->ho_context->target->src_ue_xnap_id);
   rrc_gNB_send_NGAP_PATH_SWITCH_REQUEST(rrc, UE);
 }
 
@@ -842,7 +842,7 @@ void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc,
   ue->ho_context->source->ho_status_transfer = rrc_gNB_send_XNAP_SN_STATUS_TRANSFER;
   ue->ho_context->source->is_xn = true;
   ue->ho_context->source->neighbour_pci = neighbour->physicalCellId;
-  xn_ho_ts_mark(&ue->ho_context->source->lat_t0);
+  xn_ho_ts_mark_and_log(&ue->ho_context->source->lat_t0, "T0 trigger", ue->rrc_ue_id, 0);
 
   if (!rrc_gNB_send_XNAP_HANDOVER_REQUEST(rrc, ue, neighbour, hoPrepInfo)) {
     LOG_E(NR_RRC, "UE %d: Xn HO failed — could not send HandoverRequest\n", ue->rrc_ue_id);

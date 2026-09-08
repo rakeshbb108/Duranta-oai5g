@@ -2258,7 +2258,7 @@ int rrc_gNB_process_NGAP_PATH_SWITCH_REQUEST_ACKNOWLEDGEMENT(gNB_RRC_INST *rrc,
   gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
 
   if (UE->ho_context && UE->ho_context->target && UE->ho_context->target->is_xn)
-    xn_ho_ts_mark(&UE->ho_context->target->lat_t6);
+    xn_ho_ts_mark_and_log(&UE->ho_context->target->lat_t6, "T6 PathSwitchRequestAck received", UE->rrc_ue_id, UE->ho_context->target->src_ue_xnap_id);
 
   /* Update security context */
   UE->nh_ncc = msg->nh_ncc;
