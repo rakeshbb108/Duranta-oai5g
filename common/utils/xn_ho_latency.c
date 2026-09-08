@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include "common/utils/LOG/log.h"
 
 void xn_ho_ts_mark(xn_ho_ts_t *ts)
 {
@@ -18,6 +19,22 @@ void xn_ho_ts_mark(xn_ho_ts_t *ts)
   ts->mono_ns = (uint64_t) mono.tv_sec * 1000000000ULL + mono.tv_nsec;
   ts->wall_ns = (uint64_t) wall.tv_sec * 1000000000ULL + wall.tv_nsec;
   ts->set = true;
+}
+
+void xn_ho_ts_mark_and_log(xn_ho_ts_t *ts, const char *event, uint32_t rrc_ue_id, uint32_t xnap_id)
+{
+  xn_ho_ts_mark(ts);
+
+  time_t sec = (time_t) (ts->wall_ns / 1000000000ULL);
+  long ms = (long) ((ts->wall_ns % 1000000000ULL) / 1000000ULL);
+  struct tm tm_buf;
+  gmtime_r(&sec, &tm_buf);
+  char tbuf[32];
+  strftime(tbuf, sizeof(tbuf), "%Y-%m-%dT%H:%M:%S", &tm_buf);
+
+  LOG_A(NR_RRC,
+        "Xn HO %s: UE %u xnap_id %u wall=%s.%03ldZ mono_ns=%lu\n",
+        event, rrc_ue_id, xnap_id, tbuf, ms, (unsigned long) ts->mono_ns);
 }
 
 double xn_ho_delta_ms(xn_ho_ts_t start, xn_ho_ts_t end)
