@@ -204,7 +204,7 @@ bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
 
   LOG_I(NR_RRC, "UE %d: sending XNAP_HANDOVER_REQ to gNB_ID 0x%x (assoc_id %d) s_xnap_ue_id %u\n",
         UE->rrc_ue_id, neighbour->gNB_ID, xn->assoc_id, UE->ho_context->source->src_ue_xnap_id);
-  xn_ho_ts_mark(&UE->ho_context->source->lat_t1);
+  xn_ho_ts_mark_and_log(&UE->ho_context->source->lat_t1, "T1 HandoverRequest sent", UE->rrc_ue_id, UE->ho_context->source->src_ue_xnap_id);
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
   return true;
 }
@@ -418,7 +418,7 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
     return;
   }
 
-  xn_ho_ts_mark(&UE->ho_context->source->lat_t2);
+  xn_ho_ts_mark_and_log(&UE->ho_context->source->lat_t2, "T2 HandoverRequestAck received", UE->rrc_ue_id, UE->ho_context->source->src_ue_xnap_id);
 
   UE->ho_context->source->tar_ue_xnap_id = msg->t_ng_node_ue_xnap_id;
   UE->ho_context->source->tar_assoc_id   = msg->source_assoc_id;
@@ -454,7 +454,7 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
   }
 
   rrc_gNB_trigger_reconfiguration_for_handover(rrc, UE, buffer.buf, buffer.len);
-  xn_ho_ts_mark(&UE->ho_context->source->lat_t3);
+  xn_ho_ts_mark_and_log(&UE->ho_context->source->lat_t3, "T3 RRCReconfiguration (HO cmd) sent to UE", UE->rrc_ue_id, UE->ho_context->source->src_ue_xnap_id);
   LOG_A(NR_RRC, "Xn HO: sent RRCReconfiguration (HO Command) to UE %u/RNTI %04x\n",
         UE->rrc_ue_id, UE->rnti);
   free_byte_array(buffer);
@@ -688,7 +688,7 @@ void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_UE_CONTEXT_RELEASE);
   XNAP_UE_CONTEXT_RELEASE(msg_p) = msg;
-  xn_ho_ts_mark(&UE->ho_context->target->lat_t7);
+  xn_ho_ts_mark_and_log(&UE->ho_context->target->lat_t7, "T7 UEContextRelease sent", UE->rrc_ue_id, UE->ho_context->target->src_ue_xnap_id);
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
 
   rrc_gNB_finalize_xn_ho_latency_target(rrc, UE, XN_HO_OUTCOME_SUCCESS);
@@ -724,7 +724,7 @@ int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
   LOG_I(NR_RRC, "UE %u: XNAP UE Context Release received from target — releasing source UE\n",
         UE->rrc_ue_id);
 
-  xn_ho_ts_mark(&UE->ho_context->source->lat_t7);
+  xn_ho_ts_mark_and_log(&UE->ho_context->source->lat_t7, "T7 UEContextRelease received", UE->rrc_ue_id, UE->ho_context->source->src_ue_xnap_id);
   rrc_gNB_finalize_xn_ho_latency_source(rrc, UE, XN_HO_OUTCOME_SUCCESS);
   nr_rrc_finalize_ho(UE);
 
