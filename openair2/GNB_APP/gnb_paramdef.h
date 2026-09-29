@@ -803,9 +803,13 @@ typedef enum {
 #define GNB_CONFIG_STRING_XN_PARAMETERS                              "Xn_INTERFACE"
 
 #define GNB_CONFIG_STRING_GNB_IPV4_ADDRESS_FOR_XNC                   "gnb_ipv4_address_for_xnc"
+#define GNB_CONFIG_STRING_GNB_IPV4_ADDRESS_FOR_XNU                   "gnb_ipv4_address_for_xnu"
+#define GNB_CONFIG_STRING_GNB_PORT_FOR_XNU                           "gnb_port_for_xnu"
 
 #define XNPARAMS_DESC { \
   {GNB_CONFIG_STRING_GNB_IPV4_ADDRESS_FOR_XNC, "interface ip address for xnc",   0,               .strptr=NULL, .defstrval=0,      TYPE_STRING, 0}, \
+  {GNB_CONFIG_STRING_GNB_IPV4_ADDRESS_FOR_XNU, "interface ip address for xnu (Xn-U GTP-U), defaults to xnc address", 0, .strptr=NULL, .defstrval=0, TYPE_STRING, 0}, \
+  {GNB_CONFIG_STRING_GNB_PORT_FOR_XNU,         "UDP port for xnu (Xn-U GTP-U)",  0,               .uptr=NULL,   .defintval=2152, TYPE_UINT,   0}, \
 }
 
 #define GNB_CONFIG_STRING_CANDIDATE_GNB_IPV4_ADDRESS_FOR_XNC         "candidate_gnb_ipv4_address_for_xnc"

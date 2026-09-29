@@ -19,6 +19,7 @@ typedef struct e1ap_upcp_inst_s {
   } cuup;
   instance_t gtpInstN3;
   instance_t gtpInstF1U;
+  instance_t gtpInstXnU;
   e1ap_net_config_t net_config;
 } e1ap_upcp_inst_t;
 
@@ -38,5 +39,6 @@ int e1ap_encode_send(E1_t type, sctp_assoc_t assoc_id, struct E1AP_E1AP_PDU *pdu
 
 void e1ap_common_init();
 void cuup_init_n3(instance_t instance);
+void cuup_init_xnu(instance_t instance);
 
 #endif /* E1AP_COMMON_H_ */

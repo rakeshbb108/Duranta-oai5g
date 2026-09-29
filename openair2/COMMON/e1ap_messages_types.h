@@ -197,6 +197,9 @@ typedef struct {
   char* localAddressN3;
   uint16_t localPortN3;
   uint16_t remotePortN3;
+  char* localAddressXnU;
+  uint16_t localPortXnU;
+  uint16_t remotePortXnU;
 } e1ap_net_config_t;
 
 /* GNB-CU-UP E1 Setup Request */
@@ -447,6 +450,8 @@ typedef struct pdu_session_to_setup_s {
   int numDRB2Setup;
   // DRB To Setup Item (1..<E1AP_MAX_NUM_DRBS>)
   DRB_nGRAN_to_setup_t DRBnGRanList[E1AP_MAX_NUM_DRBS];
+  // DL Data Forwarding Information Request (O): request CU-UP to allocate a forwarding TEID
+  bool dl_fwd_tnl_req;
 } pdu_session_to_setup_t;
 
 /**
@@ -625,6 +630,8 @@ typedef struct pdu_session_setup_s {
   DRB_nGRAN_setup_t DRBnGRanList[E1AP_MAX_NUM_DRBS];
   int numDRBFailed;
   DRB_nGRAN_failed_t DRBnGRanFailedList[E1AP_MAX_NUM_DRBS];
+  // DL forwarding tunnel allocated by CU-UP (O): only present when dl_fwd_tnl_req was set
+  UP_TL_information_t *dl_fwd_tnl;
 } pdu_session_setup_t;
 
 /* PDU Session Resource Modified List (9.3.3.17) */

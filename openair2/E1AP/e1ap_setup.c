@@ -117,6 +117,31 @@ MessageDef *RCconfig_NR_CU_E1(const E1_t *entity)
     get_NGU_S1U_addr(&e1ap_nc->localAddressN3, &e1ap_nc->localPortN3);
     e1ap_nc->remotePortN3 = e1ap_nc->localPortN3 ;
 
+    // Xn-U config lives in the Xn_INTERFACE block, but its meaning depends on deployment mode:
+    // monolithic/CU-DU (entity==NULL): Xn is enabled iff gnb_ipv4_address_for_xnc is set (as
+    // is_xnap_enabled(), which nr-cuup doesn't link), and Xn-U then binds gnb_ipv4_address_for_xnu,
+    // defaulting to the Xn-C address. Standalone CU-CP (entity==CPtype): no Xn-U, that's the
+    // CU-UP's job. Standalone CU-UP (entity==UPtype): no Xn-C in its conf, so presence of
+    // gnb_ipv4_address_for_xnu is the enable signal.
+    if (entity == NULL || *entity == UPtype) {
+      char xn_path[MAX_OPTNAME_SIZE * 2 + 8];
+      sprintf(xn_path, "%s.[%i].%s", GNB_CONFIG_STRING_GNB_LIST, 0, GNB_CONFIG_STRING_XN_PARAMETERS);
+      paramdef_t XnParams[] = XNPARAMS_DESC;
+      const int nb_xn_params = sizeofArray(XnParams);
+      config_get(config_get_if(), XnParams, nb_xn_params, xn_path);
+      char **xnc = gpd(XnParams, nb_xn_params, GNB_CONFIG_STRING_GNB_IPV4_ADDRESS_FOR_XNC)->strptr;
+      char **xnu = gpd(XnParams, nb_xn_params, GNB_CONFIG_STRING_GNB_IPV4_ADDRESS_FOR_XNU)->strptr;
+      const char *xnc_addr = xnc ? *xnc : NULL;
+      const char *xnu_addr = xnu ? *xnu : NULL;
+
+      const char *addr = entity != NULL ? xnu_addr : (xnc_addr ? (xnu_addr ? xnu_addr : xnc_addr) : NULL);
+      if (addr) {
+        e1ap_nc->localAddressXnU = strdup(addr);
+        e1ap_nc->localPortXnU = (uint16_t)*gpd(XnParams, nb_xn_params, GNB_CONFIG_STRING_GNB_PORT_FOR_XNU)->uptr;
+        e1ap_nc->remotePortXnU = e1ap_nc->localPortXnU;
+      }
+    }
+
     AssertFatal(config_isparamset(gnbParms, GNB_GNB_ID_IDX), "%s is not defined in configuration file\n", GNB_CONFIG_STRING_GNB_ID);
     uint32_t gnb_id = *gnbParms[GNB_GNB_ID_IDX].uptr;
     E1AP_REGISTER_REQ(msgConfig).gnb_id = gnb_id;
