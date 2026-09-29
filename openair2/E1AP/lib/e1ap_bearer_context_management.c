@@ -419,6 +419,11 @@ static bool e1_encode_pdu_session_to_setup_item(E1AP_PDU_Session_Resource_To_Set
   item->securityIndication = e1_encode_security_indication(&in->securityIndication);
   // NG UL UP Transport Layer Information (M)
   item->nG_UL_UP_TNL_Information = e1_encode_up_tnl_info(&in->UP_TL_information);
+  // DL Data Forwarding Information Request (O)
+  if (in->dl_fwd_tnl_req) {
+    asn1cCalloc(item->pDU_Session_Data_Forwarding_Information_Request, fwdReq);
+    fwdReq->data_Forwarding_Request = E1AP_Data_Forwarding_Request_dL;
+  }
   // DRB To Setup List (M)
   for (const DRB_nGRAN_to_setup_t *j = in->DRBnGRanList; j < in->DRBnGRanList + in->numDRB2Setup; j++) {
     asn1cSequenceAdd(item->dRB_To_Setup_List_NG_RAN.list, E1AP_DRB_To_Setup_Item_NG_RAN_t, ieC6_1_1);
@@ -453,6 +458,12 @@ static bool e1_decode_pdu_session_to_setup_item(pdu_session_to_setup_t *out, E1A
   CHECK_E1AP_DEC(e1_decode_snssai(&out->nssai, &item->sNSSAI));
   // Security Indication (M)
   CHECK_E1AP_DEC(e1_decode_security_indication(&out->securityIndication, &item->securityIndication));
+  // DL Data Forwarding Information Request (O)
+  if (item->pDU_Session_Data_Forwarding_Information_Request)
+    out->dl_fwd_tnl_req = item->pDU_Session_Data_Forwarding_Information_Request->data_Forwarding_Request
+                          == E1AP_Data_Forwarding_Request_dL
+                          || item->pDU_Session_Data_Forwarding_Information_Request->data_Forwarding_Request
+                          == E1AP_Data_Forwarding_Request_both;
   /* NG UL UP Transport Layer Information (M) (9.3.2.1 of 3GPP TS 38.463) */
   // GTP Tunnel
   struct E1AP_GTPTunnel *gTPTunnel = item->nG_UL_UP_TNL_Information.choice.gTPTunnel;
@@ -884,6 +895,13 @@ static bool e1_decode_pdu_session_setup_item(pdu_session_setup_t *pduSetup, E1AP
       decode_drb_failed_item(&pduSetup->DRBnGRanFailedList[j], in->dRB_Failed_List_NG_RAN->list.array[j]);
     }
   }
+  // DL Data Forwarding Information Response (O)
+  if (in->pDU_Session_Data_Forwarding_Information_Response
+      && in->pDU_Session_Data_Forwarding_Information_Response->dL_Data_Forwarding) {
+    pduSetup->dl_fwd_tnl = calloc_or_fail(1, sizeof(*pduSetup->dl_fwd_tnl));
+    CHECK_E1AP_DEC(e1_decode_up_tnl_info(pduSetup->dl_fwd_tnl,
+                                          in->pDU_Session_Data_Forwarding_Information_Response->dL_Data_Forwarding));
+  }
   return true;
 }
 
@@ -900,6 +918,10 @@ static pdu_session_setup_t cp_pdu_session_setup_item(const pdu_session_setup_t *
     cp.DRBnGRanList[j] = msg->DRBnGRanList[j];
   for (int j = 0; j < msg->numDRBFailed; j++)
     cp.DRBnGRanFailedList[j] = msg->DRBnGRanFailedList[j];
+  if (msg->dl_fwd_tnl) {
+    cp.dl_fwd_tnl = calloc_or_fail(1, sizeof(*cp.dl_fwd_tnl));
+    *cp.dl_fwd_tnl = *msg->dl_fwd_tnl;
+  }
   return cp;
 }
 
@@ -932,6 +954,12 @@ static bool e1_encode_pdu_session_setup_item(E1AP_PDU_Session_Resource_Setup_Ite
   for (const DRB_nGRAN_failed_t *j = in->DRBnGRanFailedList; j < in->DRBnGRanFailedList + in->numDRBFailed; j++) {
     asn1cSequenceAdd(item->dRB_Failed_List_NG_RAN->list, E1AP_DRB_Failed_Item_NG_RAN_t, ieC3_1_1);
     encode_drb_failed_item(ieC3_1_1, j);
+  }
+  // DL Data Forwarding Information Response (O)
+  if (in->dl_fwd_tnl) {
+    asn1cCalloc(item->pDU_Session_Data_Forwarding_Information_Response, fwdResp);
+    asn1cCalloc(fwdResp->dL_Data_Forwarding, dlFwd);
+    *dlFwd = e1_encode_up_tnl_info(in->dl_fwd_tnl);
   }
   return true;
 }
@@ -1121,6 +1149,8 @@ bool eq_bearer_context_setup_response(const e1ap_bearer_setup_resp_t *a, const e
  */
 void free_e1ap_context_setup_response(const e1ap_bearer_setup_resp_t *msg)
 {
+  for (int i = 0; i < msg->numPDUSessions; i++)
+    free(msg->pduSession[i].dl_fwd_tnl);
   free(msg->pduSession);
 }
 
