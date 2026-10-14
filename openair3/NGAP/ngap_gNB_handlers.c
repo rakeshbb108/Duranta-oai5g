@@ -1686,7 +1686,7 @@ int ngap_gNB_handle_message(sctp_assoc_t assoc_id, int32_t stream, const uint8_t
    * This can mean not implemented or no procedure for gNB (wrong direction).
    */
   if (ngap_messages_callback[pdu.choice.initiatingMessage->procedureCode][pdu.present - 1] == NULL) {
-    NGAP_ERROR("[SCTP %u] No handler for procedureCode %ld in %s\n", assoc_id, pdu.choice.initiatingMessage->procedureCode, ngap_direction2String(pdu.present - 1));
+    NGAP_ERROR("[SCTP %u] No handler for procedureCode %ld in %s\n", assoc_id, pdu.choice.initiatingMessage->procedureCode, ngap_direction2String(pdu.present));
     ASN_STRUCT_FREE_CONTENTS_ONLY(asn_DEF_NGAP_NGAP_PDU, &pdu);
     return -1;
   }
