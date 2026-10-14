@@ -25,6 +25,9 @@ MESSAGE_DEF(XNAP_UE_CONTEXT_RELEASE,   MESSAGE_PRIORITY_MED, xnap_ue_context_rel
 /* Handover Cancel: RRC -> XNAP (source sends) / XNAP -> RRC (target receives) */
 MESSAGE_DEF(XNAP_HANDOVER_CANCEL,      MESSAGE_PRIORITY_MED, xnap_handover_cancel_t,      xnap_handover_cancel)
 
+/* Local Xn UE association removal, no PDU: RRC -> XNAP only */
+MESSAGE_DEF(XNAP_UE_REMOVE_REQ,        MESSAGE_PRIORITY_MED, xnap_ue_remove_req_t,        xnap_ue_remove_req)
+
 /* TXnRELOCprep/TXnRELOCoverall expiry (source-only guard timers, xnap_ho_timers.c): XNAP -> RRC only */
 MESSAGE_DEF(XNAP_HO_RELOCPREP_TIMEOUT,    MESSAGE_PRIORITY_MED, xnap_ho_relocprep_timeout_t,    xnap_ho_relocprep_timeout)
 MESSAGE_DEF(XNAP_HO_RELOCOVERALL_TIMEOUT, MESSAGE_PRIORITY_MED, xnap_ho_relocoverall_timeout_t, xnap_ho_relocoverall_timeout)

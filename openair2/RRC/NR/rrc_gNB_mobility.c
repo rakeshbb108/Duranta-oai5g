@@ -37,11 +37,10 @@ int rrc_xn_candidate_cmp(struct rrc_xn_candidate_s *a, struct rrc_xn_candidate_s
 
 RB_GENERATE(rrc_xn_cand_tree, rrc_xn_candidate_s, entry, rrc_xn_candidate_cmp);
 
-static rrc_xn_candidate_t *rrc_xn_candidate_alloc(uint32_t gnb_id, sctp_assoc_t assoc_id)
+static rrc_xn_candidate_t *rrc_xn_candidate_alloc(uint32_t gnb_id)
 {
   rrc_xn_candidate_t *cand = calloc_or_fail(1, sizeof(*cand));
   cand->gnb_id = gnb_id;
-  cand->assoc_id = assoc_id;
   return cand;
 }
 
@@ -50,21 +49,18 @@ static void rrc_xn_candidate_free(rrc_xn_candidate_t *cand)
   free(cand);
 }
 
-void rrc_add_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id, sctp_assoc_t assoc_id)
+void rrc_add_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id)
 {
-  /* Update assoc_id if the gNB_id is already registered (reconnect). */
   rrc_xn_candidate_t key = {.gnb_id = gnb_id};
-  rrc_xn_candidate_t *existing = RB_FIND(rrc_xn_cand_tree, &rrc->xn_candidates, &key);
-  if (existing) {
-    existing->assoc_id = assoc_id;
-    LOG_I(NR_RRC, "Xn candidate gNB_id 0x%x updated (assoc_id %d)\n", gnb_id, assoc_id);
+  if (RB_FIND(rrc_xn_cand_tree, &rrc->xn_candidates, &key)) {
+    LOG_I(NR_RRC, "Xn candidate gNB_id 0x%x already registered (reconnect)\n", gnb_id);
     return;
   }
 
-  rrc_xn_candidate_t *cand = rrc_xn_candidate_alloc(gnb_id, assoc_id);
+  rrc_xn_candidate_t *cand = rrc_xn_candidate_alloc(gnb_id);
   rrc_xn_candidate_t *dup = RB_INSERT(rrc_xn_cand_tree, &rrc->xn_candidates, cand);
   AssertFatal(dup == NULL, "duplicate Xn candidate gNB_id 0x%x despite RB_FIND miss above\n", gnb_id);
-  LOG_I(NR_RRC, "Xn candidate gNB_id 0x%x registered (assoc_id %d)\n", gnb_id, assoc_id);
+  LOG_I(NR_RRC, "Xn candidate gNB_id 0x%x registered\n", gnb_id);
 }
 
 void rrc_remove_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id)
@@ -729,9 +725,17 @@ void nr_HO_N2_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t
 static void nr_rrc_xn_ho_failure(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 {
   nr_ho_target_cu_t *target = UE->ho_context->target;
-  xnap_cause_t cause = {.type = XNAP_CAUSE_RADIO_NETWORK,
-                        .value = XNAP_CAUSE_RADIO_NETWORK_LAYER_UNSPECIFIED};
-  rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(rrc, target->src_ue_xnap_id, target->source_assoc_id, cause);
+  if (target->xn_token != 0) {
+    xnap_cause_t cause = {.type = XNAP_CAUSE_RADIO_NETWORK,
+                          .value = XNAP_CAUSE_RADIO_NETWORK_LAYER_UNSPECIFIED};
+    rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(rrc, target->xn_token, cause);
+    target->xn_token = 0;
+  } else {
+    /* HANDOVER PREPARATION FAILURE is only valid before HANDOVER REQUEST ACKNOWLEDGE
+     * (TS 38.423 §8.2.1.3): after the Ack, release locally only */
+    LOG_W(NR_RRC, "UE %d: Xn HO failure after HandoverRequestAck — local release only\n", UE->rrc_ue_id);
+    rrc_gNB_send_XNAP_UE_REMOVE_REQ(rrc, UE);
+  }
   rrc_gNB_xn_ho_target_abort(rrc, UE, "handover preparation failed at target");
 }
 
@@ -793,14 +797,21 @@ static void nr_rrc_xn_ho_cancel(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
   LOG_I(NR_RRC, "UE %d: cancelling Xn handover — sending HandoverCancel to target gNB\n", UE->rrc_ue_id);
 
   xnap_handover_cancel_t msg = {
-    .s_ng_node_ue_xnap_id = UE->ho_context->source->src_ue_xnap_id,
     .cause = {.type = XNAP_CAUSE_RADIO_NETWORK,
               .value = XNAP_CAUSE_RADIO_NETWORK_LAYER_PROCEDURE_CANCELLED},
+    .rrc_ue_id = UE->rrc_ue_id,
   };
 
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_HANDOVER_CANCEL);
   XNAP_HANDOVER_CANCEL(msg_p) = msg;
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
+}
+
+/** @brief true if this handover context belongs to an Xn handover (source or target role) */
+bool nr_rrc_is_xn_ho(const nr_handover_context_t *ho)
+{
+  return (ho->source && ho->source->ho_cancel == nr_rrc_xn_ho_cancel)
+         || (ho->target && ho->target->ho_trigger == nr_rrc_trigger_xn_ho_target);
 }
 
 /** @brief Trigger Xn handover on source gNB:
@@ -901,16 +912,14 @@ void nr_HO_Xn_trigger_telnet(gNB_RRC_INST *rrc, uint32_t neighbour_pci, uint32_t
     return;
   }
 
-  const rrc_xn_candidate_t *xn = rrc_find_xn_candidate(rrc, neighbour->gNB_ID);
-  if (!xn) {
+  if (!rrc_find_xn_candidate(rrc, neighbour->gNB_ID)) {
     LOG_W(NR_RRC,
           "Xn HO trigger failed for UE %d: no Xn connection to gNB_ID 0x%x (target PCI=%d)\n",
           rrc_ue_id, neighbour->gNB_ID, neighbour_pci);
     return;
   }
 
-  LOG_I(NR_RRC, "UE %d: triggering Xn HO, source PCI=%d to neighbour PCI=%d (assoc_id %d)\n",
-        rrc_ue_id, pcell->info.pci, neighbour_pci, xn->assoc_id);
+  LOG_I(NR_RRC, "UE %d: triggering Xn HO, source PCI=%d to neighbour PCI=%d\n", rrc_ue_id, pcell->info.pci, neighbour_pci);
   nr_rrc_trigger_xn_ho(rrc, UE, neighbour);
 }
 

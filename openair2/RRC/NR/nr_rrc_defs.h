@@ -652,10 +652,8 @@ typedef struct sib2_config_s {
  *  processing to decide between Xn-HO and N2-HO. */
 typedef struct rrc_xn_candidate_s {
   RB_ENTRY(rrc_xn_candidate_s) entry;
-  /* remote gNB identity (tree key) */
+  /* remote gNB identity (tree key); the Xn-C association is owned by XnAP */
   uint32_t gnb_id;
-  /* SCTP association to that gNB */
-  sctp_assoc_t assoc_id;
 } rrc_xn_candidate_t;
 
 int rrc_xn_candidate_cmp(struct rrc_xn_candidate_s *a, struct rrc_xn_candidate_s *b);

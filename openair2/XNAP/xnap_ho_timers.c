@@ -24,11 +24,11 @@ void xnap_ho_timers_init(uint32_t t_xn_reloc_prep_ms, uint32_t t_xn_reloc_overal
 /* Re-injects HandoverCancel through the normal ITTI dispatch (XNAP_HANDOVER_CANCEL
  * case in xnap_gNB_task()) rather than calling the RRC-triggered send function
  * directly — keeps this file decoupled from xnap_gNB.c's internals. */
-static void send_handover_cancel(instance_t instance, uint32_t xnap_ue_id, uint8_t cause_value)
+static void send_handover_cancel(instance_t instance, uint32_t rrc_ue_id, uint8_t cause_value)
 {
   MessageDef *msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HANDOVER_CANCEL);
   XNAP_HANDOVER_CANCEL(msg) = (xnap_handover_cancel_t){
-    .s_ng_node_ue_xnap_id = xnap_ue_id,
+    .rrc_ue_id = rrc_ue_id,
     .cause = {.type = XNAP_CAUSE_RADIO_NETWORK, .value = cause_value},
   };
   itti_send_msg_to_task(TASK_XNAP, instance, msg);
@@ -61,39 +61,38 @@ void xnap_check_ho_timers(instance_t instance)
 
   for (int i = 0; i < n; i++) {
     uint32_t xnap_ue_id = ids[i];
-    if (!xnap_exists_ue_data(xnap_ue_id)) {
-      /* UE removed (e.g. UE Context Release already processed) without
-       * going through xnap_ho_timer_untrack — stale slot, drop it. */
+    xn_ue_assoc_t *ue = xn_ue_get_by_local(xnap_ue_id);
+    if (ue == NULL) {
+      /* UE removed without going through xnap_ho_timer_untrack — stale slot, drop it. */
       xnap_ho_timer_untrack(xnap_ue_id);
       continue;
     }
 
-    xnap_ue_data_t data = xnap_get_ue_data(xnap_ue_id);
     xnap_ho_src_event_t expired_event;
-    if (!xnap_ho_src_timer_check(data.sm_state, &data.timer_marks, &g_xnap_ho_timers, &expired_event))
+    if (!xnap_ho_src_timer_check(ue->src_state, &ue->timer_marks, &g_xnap_ho_timers, &expired_event))
       continue;
 
     bool overall = expired_event == XNAP_HO_SRC_EV_TIMER_RELOCOVERALL_EXPIRY;
-    xnap_ho_src_result_t r = xnap_ho_src_transition(data.sm_state, expired_event);
+    xnap_ho_src_result_t r = xnap_ho_src_transition(ue->src_state, expired_event);
 
     LOG_W(XNAP, "[gNB %ld] xnap_ue_id %u (rrc_ue_id %u): %s expired — sending HandoverCancel\n",
-          instance, xnap_ue_id, data.rrc_ue_id, overall ? "TXnRELOCoverall" : "TXnRELOCprep");
+          instance, xnap_ue_id, ue->rrc_ue_id, overall ? "TXnRELOCoverall" : "TXnRELOCprep");
 
     /* Both expiry actions leave {HO_REQ_SENT, HO_PREPARED} for good (see
      * xnap_ho_sm.c) so the roster slot is freed here, not re-armed. */
-    xnap_set_ue_sm_state(xnap_ue_id, r.next_state);
+    ue->src_state = r.next_state;
     xnap_ho_timer_untrack(xnap_ue_id);
 
-    /* Do NOT remove xnap_ue_data here: send_handover_cancel() only enqueues
+    /* Do NOT remove the entry here: send_handover_cancel() only enqueues
      * XNAP_HANDOVER_CANCEL, it doesn't send it - the actual encode/send (and
-     * matching xnap_remove_ue_data()) happens later, when xnap_gNB_task()
+     * matching xn_ue_remove()) happens later, when xnap_gNB_task()
      * dequeues that message and runs xnap_gNB_generate_handover_cancel().
      * Removing the entry here would make that lookup fail and silently drop
      * the Cancel instead of sending it (this was a real, observed bug). */
     send_handover_cancel(instance,
-                          xnap_ue_id,
+                          ue->rrc_ue_id,
                           overall ? XNAP_CAUSE_RADIO_NETWORK_LAYER_TXN_RELOCOVERALL_EXPIRY
                                   : XNAP_CAUSE_RADIO_NETWORK_LAYER_TXN_RELOCPREP_EXPIRY);
-    notify_rrc_timeout(instance, data.rrc_ue_id, overall);
+    notify_rrc_timeout(instance, ue->rrc_ue_id, overall);
   }
 }

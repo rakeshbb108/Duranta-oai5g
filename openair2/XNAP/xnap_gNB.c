@@ -42,35 +42,46 @@ static void xnap_gNB_generate_xn_setup_request(instance_t instance, xnap_gnb_ins
   xnap_gNB_itti_send_sctp_data(instance, peer->assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
 }
 
-/* Target gNB: target RRC sends ACK — store the t_xnap_ue_id mapping, send HandoverRequestAck */
+/* Connected Xn peer on the given association, or NULL */
+static xnap_peer_t *xnap_get_connected_peer(xnap_gnb_inst_t *inst, sctp_assoc_t assoc_id)
+{
+  xnap_peer_t *peer = xnap_get_peer_by_assoc(inst, assoc_id);
+  return peer != NULL && peer->state == XNAP_PEER_STATE_CONNECTED ? peer : NULL;
+}
+
+/* Target gNB: target RRC accepted the HandoverRequest — bind the rrc_ue_id to the
+ * pending entry (xn_token), fill both XnAP IDs and send HandoverRequestAck */
 static void xnap_gNB_generate_handover_request_acknowledge(instance_t instance,
                                                             xnap_handover_req_ack_t *ack)
 {
   xnap_gnb_inst_t *inst = xnap_get_inst(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
-  xnap_peer_t *peer = xnap_get_peer_by_assoc(inst, ack->source_assoc_id);
+  xn_ue_assoc_t *ue = xn_ue_get_by_local(ack->xn_token);
+  if (ue == NULL || ue->role != XN_ROLE_TARGET || ue->rrc_ue_id != XN_UE_RRC_ID_UNBOUND) {
+    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: no pending HandoverRequest for t_xnap_ue_id %u (rrc_ue_id %u) — dropping\n",
+          instance, ack->xn_token, ack->rrc_ue_id);
+    return;
+  }
+  xnap_ho_tgt_result_t r = xnap_ho_tgt_transition(ue->tgt_state, XNAP_HO_TGT_EV_ADMISSION_ACCEPTED);
+  if (r.action == XNAP_HO_TGT_ACT_ILLEGAL) {
+    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: illegal in sm_state %d for t_xnap_ue_id %u — dropping\n",
+          instance, ue->tgt_state, ue->local_xnap_id);
+    return;
+  }
+  xnap_peer_t *peer = xnap_get_connected_peer(inst, ue->assoc_id);
   if (peer == NULL) {
-    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: no peer for source_assoc_id %d\n",
-          instance, ack->source_assoc_id);
+    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: no connected peer for assoc_id %d\n", instance, ue->assoc_id);
     return;
   }
-  if (peer->state != XNAP_PEER_STATE_CONNECTED) {
-    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: peer assoc_id %d not connected\n",
-          instance, ack->source_assoc_id);
+  if (!xn_ue_bind_rrc(ue->local_xnap_id, ack->rrc_ue_id)) {
+    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: cannot bind rrc_ue_id %u to t_xnap_ue_id %u — dropping\n",
+          instance, ack->rrc_ue_id, ue->local_xnap_id);
     return;
   }
-
-  /* Record the target rrc_ue_id mapping under the RRC-allocated t_ng_node_ue_xnap_id.
-   * sm_state tracking starts here (HO_REQ_ACK_SENT) — no early allocation of
-   * t_ng_node_ue_xnap_id means admission control (pre-Ack) stays untracked. */
-  xnap_target_ue_data_t ue_data = {.rrc_ue_id = ack->rrc_ue_id,
-                                   .source_assoc_id = ack->source_assoc_id,
-                                   .s_ng_node_ue_xnap_id = ack->s_ng_node_ue_xnap_id,
-                                   .sm_state = XNAP_HO_TGT_HO_REQ_ACK_SENT};
-  bool ok = xnap_add_target_ue_data(ack->t_ng_node_ue_xnap_id, &ue_data);
-  AssertFatal(ok, "[gNB %ld] Failed to store target UE data for t_xnap_ue_id %u\n",
-              instance, ack->t_ng_node_ue_xnap_id);
+  ue->tgt_state = r.next_state;
+  ack->s_ng_node_ue_xnap_id = ue->remote_xnap_id;
+  ack->t_ng_node_ue_xnap_id = ue->local_xnap_id;
 
   XNAP_XnAP_PDU_t *pdu = encode_xnap_handover_request_acknowledge(ack);
   AssertFatal(pdu != NULL, "[gNB %ld] encode_xnap_handover_request_acknowledge() failed\n", instance);
@@ -83,42 +94,57 @@ static void xnap_gNB_generate_handover_request_acknowledge(instance_t instance,
 
   LOG_I(XNAP, "[gNB %ld] Sending HandoverRequestAck to source assoc_id %d "
         "s_xnap_ue_id %u t_xnap_ue_id %u rrc_ue_id %u (%u bytes)\n",
-        instance, ack->source_assoc_id, ack->s_ng_node_ue_xnap_id, ack->t_ng_node_ue_xnap_id,
+        instance, ue->assoc_id, ack->s_ng_node_ue_xnap_id, ack->t_ng_node_ue_xnap_id,
         ack->rrc_ue_id, length);
 
   xnap_gNB_itti_send_sctp_data(instance, peer->assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
 }
 
-/* Source gNB: RRC triggers Xn HO — store mapping under the RRC-allocated XnAP UE ID, send HandoverRequest */
+/* Source gNB: tell RRC the HandoverRequest could not be sent (no Xn PDU involved) */
+static void xnap_notify_rrc_local_prep_failure(instance_t instance, uint32_t rrc_ue_id)
+{
+  MessageDef *msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HANDOVER_PREP_FAILURE);
+  XNAP_HANDOVER_PREP_FAILURE(msg) = (xnap_handover_preparation_failure_t){
+    .cause = {.type = XNAP_CAUSE_TRANSPORT, .value = XNAP_CAUSE_TRANSPORT_LAYER_TRANSPORT_RESOURCE_UNAVAILABLE},
+    .rrc_ue_id = rrc_ue_id,
+  };
+  itti_send_msg_to_task(TASK_RRC_GNB, instance, msg);
+}
+
+/* Source gNB: RRC triggers Xn HO — resolve the peer by gNB ID, allocate the source
+ * XnAP UE ID, create the UE association and send HandoverRequest */
 static void xnap_gNB_generate_handover_request(instance_t instance, xnap_handover_req_t *req)
 {
   xnap_gnb_inst_t *inst = xnap_get_inst(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
-  xnap_peer_t *peer = xnap_get_peer_by_assoc(inst, req->target_assoc_id);
+  xnap_peer_t *peer = xnap_get_connected_peer_by_remote_gnb_id(inst, req->target_gnb_id, -1);
   if (peer == NULL) {
-    LOG_E(XNAP, "[gNB %ld] HandoverRequest: no peer for assoc_id %d\n",
-          instance, req->target_assoc_id);
-    return;
-  }
-  if (peer->state != XNAP_PEER_STATE_CONNECTED) {
-    LOG_E(XNAP, "[gNB %ld] HandoverRequest: peer assoc_id %d not connected\n",
-          instance, req->target_assoc_id);
+    LOG_E(XNAP, "[gNB %ld] HandoverRequest: no connected Xn peer for gNB_id 0x%x (rrc_ue_id %u)\n",
+          instance, req->target_gnb_id, req->rrc_ue_id);
+    xnap_notify_rrc_local_prep_failure(instance, req->rrc_ue_id);
     return;
   }
 
-  /* Record the rrc_ue_id mapping under the RRC-allocated s_ng_node_ue_xnap_id so
-   * incoming HandoverRequestAck / Failure can be routed back to the right UE.
-   * sm_state starts at HO_REQ_SENT directly (TS 38.423 §8.2.1.2): there is no
+  xn_ue_assoc_t *stale = xn_ue_get_by_rrc(req->rrc_ue_id);
+  if (stale != NULL) {
+    LOG_W(XNAP, "[gNB %ld] HandoverRequest: rrc_ue_id %u still has xnap_ue_id %u — removing stale entry\n",
+          instance, req->rrc_ue_id, stale->local_xnap_id);
+    xn_ue_remove(stale->local_xnap_id);
+  }
+
+  /* sm_state starts at HO_REQ_SENT directly (TS 38.423 §8.2.1.2): there is no
    * persisted "XN_READY" entry to transition from, this IS the entry's creation. */
-  xnap_ue_data_t ue_data = {.rrc_ue_id = req->rrc_ue_id,
-                            .target_assoc_id = req->target_assoc_id,
-                            .t_ng_node_ue_xnap_id = -1,
-                            .sm_state = XNAP_HO_SRC_HO_REQ_SENT};
-  xnap_ho_src_set_relocprep_start(&ue_data.timer_marks, xnap_ho_timers_now());
-  bool ok = xnap_add_ue_data(req->s_ng_node_ue_xnap_id, &ue_data);
-  AssertFatal(ok, "[gNB %ld] Failed to store UE data for xnap_ue_id %u\n", instance, req->s_ng_node_ue_xnap_id);
-  xnap_ho_timer_track(req->s_ng_node_ue_xnap_id);
+  xn_ue_assoc_t ue = {.local_xnap_id = xn_ue_alloc_local_id(),
+                      .rrc_ue_id = req->rrc_ue_id,
+                      .role = XN_ROLE_SOURCE,
+                      .assoc_id = peer->assoc_id,
+                      .src_state = XNAP_HO_SRC_HO_REQ_SENT};
+  xnap_ho_src_set_relocprep_start(&ue.timer_marks, xnap_ho_timers_now());
+  bool ok = xn_ue_add(&ue);
+  AssertFatal(ok, "[gNB %ld] Failed to store UE data for xnap_ue_id %u\n", instance, ue.local_xnap_id);
+  xnap_ho_timer_track(ue.local_xnap_id);
+  req->s_ng_node_ue_xnap_id = ue.local_xnap_id;
 
   XNAP_XnAP_PDU_t *pdu = encode_xnap_handover_request(req);
   AssertFatal(pdu != NULL, "[gNB %ld] encode_xnap_handover_request() failed\n", instance);
@@ -129,27 +155,38 @@ static void xnap_gNB_generate_handover_request(instance_t instance, xnap_handove
   ASN_STRUCT_FREE(asn_DEF_XNAP_XnAP_PDU, pdu);
   AssertFatal(rc == 0, "[gNB %ld] encode_pdu() failed for HandoverRequest\n", instance);
 
-  LOG_I(XNAP, "[gNB %ld] Sending HandoverRequest to peer assoc_id %d xnap_ue_id %u rrc_ue_id %u (%u bytes)\n",
-        instance, req->target_assoc_id, req->s_ng_node_ue_xnap_id, req->rrc_ue_id, length);
+  LOG_I(XNAP, "[gNB %ld] Sending HandoverRequest to gNB_id 0x%x assoc_id %d xnap_ue_id %u rrc_ue_id %u (%u bytes)\n",
+        instance, req->target_gnb_id, peer->assoc_id, ue.local_xnap_id, req->rrc_ue_id, length);
 
   xnap_gNB_itti_send_sctp_data(instance, peer->assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
 }
 
-/* Target gNB: RRC rejects a HandoverRequest — encode and send HandoverPreparationFailure to source */
+/* Target gNB: RRC rejects a HandoverRequest — send HandoverPreparationFailure to source
+ * and drop the pending entry. Only valid before HandoverRequestAck (TS 38.423 §8.2.1.3). */
 static void xnap_gNB_generate_handover_prep_failure(instance_t instance, xnap_handover_preparation_failure_t *msg)
 {
   xnap_gnb_inst_t *inst = xnap_get_inst(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
-  xnap_peer_t *peer = xnap_get_peer_by_assoc(inst, msg->assoc_id);
-  if (peer == NULL) {
-    LOG_E(XNAP, "[gNB %ld] HandoverPreparationFailure: no peer for assoc_id %d\n",
-          instance, msg->assoc_id);
+  xn_ue_assoc_t *ue = xn_ue_get_by_local(msg->xn_token);
+  if (ue == NULL || ue->role != XN_ROLE_TARGET) {
+    LOG_E(XNAP, "[gNB %ld] HandoverPreparationFailure: no pending HandoverRequest for t_xnap_ue_id %u — dropping\n",
+          instance, msg->xn_token);
     return;
   }
-  if (peer->state != XNAP_PEER_STATE_CONNECTED) {
-    LOG_E(XNAP, "[gNB %ld] HandoverPreparationFailure: peer assoc_id %d not connected\n",
-          instance, msg->assoc_id);
+  if (ue->rrc_ue_id != XN_UE_RRC_ID_UNBOUND) {
+    LOG_E(XNAP, "[gNB %ld] HandoverPreparationFailure after HandoverRequestAck for t_xnap_ue_id %u — not sent, local removal only\n",
+          instance, ue->local_xnap_id);
+    xn_ue_remove(ue->local_xnap_id);
+    return;
+  }
+
+  const sctp_assoc_t assoc_id = ue->assoc_id;
+  msg->s_ng_node_ue_xnap_id = ue->remote_xnap_id;
+  xn_ue_remove(ue->local_xnap_id);
+
+  if (xnap_get_connected_peer(inst, assoc_id) == NULL) {
+    LOG_E(XNAP, "[gNB %ld] HandoverPreparationFailure: no connected peer for assoc_id %d\n", instance, assoc_id);
     return;
   }
 
@@ -164,30 +201,31 @@ static void xnap_gNB_generate_handover_prep_failure(instance_t instance, xnap_ha
 
   LOG_I(XNAP, "[gNB %ld] Sending HandoverPreparationFailure to source assoc_id %d s_xnap_ue_id %u "
         "cause group %d value %d (%u bytes)\n",
-        instance, msg->assoc_id, msg->s_ng_node_ue_xnap_id, msg->cause.type, msg->cause.value, length);
+        instance, assoc_id, msg->s_ng_node_ue_xnap_id, msg->cause.type, msg->cause.value, length);
 
-  xnap_gNB_itti_send_sctp_data(instance, msg->assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
+  xnap_gNB_itti_send_sctp_data(instance, assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
 }
 
-/* Source gNB: RRC sends SN Status Transfer — encode and send to target */
+/* Source gNB: RRC sends SN Status Transfer — fill XnAP IDs and send to target */
 static void xnap_gNB_generate_sn_status_transfer(instance_t instance, xnap_sn_status_transfer_t *msg)
 {
   xnap_gnb_inst_t *inst = xnap_get_inst(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
-  xnap_ue_data_t ue_data = xnap_get_ue_data(msg->s_ng_node_ue_xnap_id);
-  sctp_assoc_t assoc_id = ue_data.target_assoc_id;
-
-  xnap_peer_t *peer = xnap_get_peer_by_assoc(inst, assoc_id);
+  const xn_ue_assoc_t *ue = xn_ue_get_by_rrc(msg->rrc_ue_id);
+  if (ue == NULL || ue->role != XN_ROLE_SOURCE || !ue->remote_valid) {
+    LOG_E(XNAP, "[gNB %ld] SN Status Transfer: no prepared Xn HO for rrc_ue_id %u — dropping\n",
+          instance, msg->rrc_ue_id);
+    return;
+  }
+  sctp_assoc_t assoc_id = ue->assoc_id;
+  xnap_peer_t *peer = xnap_get_connected_peer(inst, assoc_id);
   if (peer == NULL) {
-    LOG_E(XNAP, "[gNB %ld] SN Status Transfer: no peer for assoc_id %d\n", instance, assoc_id);
+    LOG_E(XNAP, "[gNB %ld] SN Status Transfer: no connected peer for assoc_id %d\n", instance, assoc_id);
     return;
   }
-  if (peer->state != XNAP_PEER_STATE_CONNECTED) {
-    LOG_E(XNAP, "[gNB %ld] SN Status Transfer: peer assoc_id %d not connected\n",
-          instance, assoc_id);
-    return;
-  }
+  msg->s_ng_node_ue_xnap_id = ue->local_xnap_id;
+  msg->t_ng_node_ue_xnap_id = ue->remote_xnap_id;
 
   XNAP_XnAP_PDU_t *pdu = encode_xnap_sn_status_transfer(msg);
   AssertFatal(pdu != NULL, "[gNB %ld] encode_xnap_sn_status_transfer() failed\n", instance);
@@ -198,30 +236,33 @@ static void xnap_gNB_generate_sn_status_transfer(instance_t instance, xnap_sn_st
   ASN_STRUCT_FREE(asn_DEF_XNAP_XnAP_PDU, pdu);
   AssertFatal(rc == 0, "[gNB %ld] encode_pdu() failed for SN Status Transfer\n", instance);
 
-  LOG_I(XNAP, "[gNB %ld] Sending SN Status Transfer to peer assoc_id %d (%u bytes)\n",
-        instance, assoc_id, length);
+  LOG_I(XNAP, "[gNB %ld] Sending SN Status Transfer to peer assoc_id %d s_xnap_ue_id %u t_xnap_ue_id %u (%u bytes)\n",
+        instance, assoc_id, msg->s_ng_node_ue_xnap_id, msg->t_ng_node_ue_xnap_id, length);
 
   xnap_gNB_itti_send_sctp_data(instance, peer->assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
 }
 
-/* Target gNB: RRC sends UE Context Release — encode and send to source */
+/* Target gNB: RRC sends UE Context Release — fill XnAP IDs, send to source, drop the entry */
 static void xnap_gNB_generate_ue_context_release(instance_t instance, xnap_ue_context_release_t *msg)
 {
   xnap_gnb_inst_t *inst = xnap_get_inst(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
-  xnap_target_ue_data_t tgt_data = xnap_get_target_ue_data(msg->t_ng_node_ue_xnap_id);
-  /* RRCReconfigurationComplete / NG Path Switch are RRC/NGAP-domain events
-   * XNAP never observes (see xnap_ho_sm.h — neither carries an XnAP timer),
-   * so this jumps HO_REQ_ACK_SENT straight to UE_CTXT_REL_SENT without the
-   * intermediate UE_ARRIVED_PATH_SWITCHING hop xnap_ho_tgt_transition() would
-   * otherwise require; set directly rather than through the transition table. */
-  xnap_set_target_ue_sm_state(msg->t_ng_node_ue_xnap_id, XNAP_HO_TGT_UE_CTXT_REL_SENT);
+  xn_ue_assoc_t *ue = xn_ue_get_by_rrc(msg->rrc_ue_id);
+  if (ue == NULL || ue->role != XN_ROLE_TARGET) {
+    LOG_E(XNAP, "[gNB %ld] UE Context Release: no Xn HO for rrc_ue_id %u — dropping\n", instance, msg->rrc_ue_id);
+    return;
+  }
+  /* HO_REQ_ACK_SENT -> UE_CTXT_REL_SENT ends the target procedure (RRCReconfigurationComplete /
+   * NG Path Switch are RRC/NGAP-domain events XNAP never observes, see xnap_ho_sm.h): the entry is
+   * dropped right after filling the IDs. */
+  const sctp_assoc_t assoc_id = ue->assoc_id;
+  msg->s_ng_node_ue_xnap_id = ue->remote_xnap_id;
+  msg->t_ng_node_ue_xnap_id = ue->local_xnap_id;
+  xn_ue_remove(ue->local_xnap_id);
 
-  xnap_peer_t *peer = xnap_get_peer_by_assoc(inst, tgt_data.source_assoc_id);
-  if (peer == NULL) {
-    LOG_E(XNAP, "[gNB %ld] UE Context Release: no peer for source_assoc_id %d\n",
-          instance, tgt_data.source_assoc_id);
+  if (xnap_get_peer_by_assoc(inst, assoc_id) == NULL) {
+    LOG_E(XNAP, "[gNB %ld] UE Context Release: no peer for source_assoc_id %d\n", instance, assoc_id);
     return;
   }
 
@@ -234,31 +275,30 @@ static void xnap_gNB_generate_ue_context_release(instance_t instance, xnap_ue_co
   ASN_STRUCT_FREE(asn_DEF_XNAP_XnAP_PDU, pdu);
   AssertFatal(rc == 0, "[gNB %ld] encode_pdu() failed for UE Context Release\n", instance);
 
-  LOG_I(XNAP, "[gNB %ld] Sending UE Context Release to source assoc_id %d t_xnap_ue_id %u (%u bytes)\n",
-        instance, tgt_data.source_assoc_id, msg->t_ng_node_ue_xnap_id, length);
+  LOG_I(XNAP, "[gNB %ld] Sending UE Context Release to source assoc_id %d s_xnap_ue_id %u t_xnap_ue_id %u (%u bytes)\n",
+        instance, assoc_id, msg->s_ng_node_ue_xnap_id, msg->t_ng_node_ue_xnap_id, length);
 
-  xnap_gNB_itti_send_sctp_data(instance, tgt_data.source_assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
-  xnap_remove_target_ue_data(msg->t_ng_node_ue_xnap_id);
+  xnap_gNB_itti_send_sctp_data(instance, assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
 }
 
-/* Source gNB: RRC cancels an ongoing handover — encode and send HandoverCancel to target */
+/* Source gNB: RRC (or a TXnRELOC* expiry) cancels an ongoing handover — send
+ * HandoverCancel to target and drop the entry */
 static void xnap_gNB_generate_handover_cancel(instance_t instance, xnap_handover_cancel_t *msg)
 {
   xnap_gnb_inst_t *inst = xnap_get_inst(instance);
   AssertFatal(inst != NULL, "Xn instance %ld not found\n", instance);
 
-  if (!xnap_exists_ue_data(msg->s_ng_node_ue_xnap_id)) {
-    LOG_W(XNAP, "[gNB %ld] HandoverCancel: unknown s_xnap_ue_id %u — dropping\n",
-          instance, msg->s_ng_node_ue_xnap_id);
+  xn_ue_assoc_t *ue = xn_ue_get_by_rrc(msg->rrc_ue_id);
+  if (ue == NULL || ue->role != XN_ROLE_SOURCE) {
+    LOG_W(XNAP, "[gNB %ld] HandoverCancel: no Xn HO for rrc_ue_id %u — dropping\n", instance, msg->rrc_ue_id);
     return;
   }
-  xnap_ue_data_t ue_data = xnap_get_ue_data(msg->s_ng_node_ue_xnap_id);
+  const sctp_assoc_t assoc_id = ue->assoc_id;
+  msg->s_ng_node_ue_xnap_id = ue->local_xnap_id;
+  xn_ue_remove(ue->local_xnap_id);
 
-  xnap_peer_t *peer = xnap_get_peer_by_assoc(inst, ue_data.target_assoc_id);
-  if (peer == NULL || peer->state != XNAP_PEER_STATE_CONNECTED) {
-    LOG_E(XNAP, "[gNB %ld] HandoverCancel: no connected peer for assoc_id %d\n",
-          instance, ue_data.target_assoc_id);
-    xnap_remove_ue_data(msg->s_ng_node_ue_xnap_id);
+  if (xnap_get_connected_peer(inst, assoc_id) == NULL) {
+    LOG_E(XNAP, "[gNB %ld] HandoverCancel: no connected peer for assoc_id %d\n", instance, assoc_id);
     return;
   }
 
@@ -273,11 +313,21 @@ static void xnap_gNB_generate_handover_cancel(instance_t instance, xnap_handover
 
   LOG_I(XNAP, "[gNB %ld] Sending HandoverCancel to target assoc_id %d s_xnap_ue_id %u "
         "cause group %d value %d (%u bytes)\n",
-        instance, ue_data.target_assoc_id, msg->s_ng_node_ue_xnap_id,
+        instance, assoc_id, msg->s_ng_node_ue_xnap_id,
         msg->cause.type, msg->cause.value, length);
 
-  xnap_gNB_itti_send_sctp_data(instance, ue_data.target_assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
-  xnap_remove_ue_data(msg->s_ng_node_ue_xnap_id);
+  xnap_gNB_itti_send_sctp_data(instance, assoc_id, buffer, length, XNAP_NON_UE_STREAM_ID);
+}
+
+/* RRC tore down an Xn HO context outside the normal end: drop the UE association locally */
+static void xnap_gNB_handle_ue_remove_req(instance_t instance, const xnap_ue_remove_req_t *req)
+{
+  const xn_ue_assoc_t *ue = xn_ue_get_by_rrc(req->rrc_ue_id);
+  if (ue == NULL)
+    return;
+  LOG_I(XNAP, "[gNB %ld] Removing Xn UE association xnap_ue_id %u (rrc_ue_id %u, %s) on RRC request\n",
+        instance, ue->local_xnap_id, req->rrc_ue_id, ue->role == XN_ROLE_SOURCE ? "source" : "target");
+  xn_ue_remove(ue->local_xnap_id);
 }
 
 /* Create the Xn instance, bind a local SCTP listener (for incoming Xn
@@ -441,7 +491,7 @@ void *xnap_task(void *args)
 {
   UNUSED(args);
   LOG_I(XNAP, "Starting XnAP task\n");
-  xnap_init_ue_data();
+  xn_ue_init();
   itti_mark_task_ready(TASK_XNAP);
 
   while (1) {
@@ -498,6 +548,10 @@ void *xnap_task(void *args)
 
       case XNAP_HANDOVER_CANCEL:
         xnap_gNB_generate_handover_cancel(instance, &XNAP_HANDOVER_CANCEL(msg));
+        break;
+
+      case XNAP_UE_REMOVE_REQ:
+        xnap_gNB_handle_ue_remove_req(instance, &XNAP_UE_REMOVE_REQ(msg));
         break;
 
       default:

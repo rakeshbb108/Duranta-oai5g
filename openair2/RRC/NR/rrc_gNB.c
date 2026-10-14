@@ -1902,10 +1902,8 @@ static void process_Event_Based_Measurement_Report(gNB_RRC_INST *rrc,
             if (neighbourCellRSRP > best_rsrp) {
               // UE can send multiple neighbour cells A3 event report in 1 Meas Report. So, we need to find the best neighbour
               best_rsrp = neighbourCellRSRP;
-              const rrc_xn_candidate_t *xn = rrc_find_xn_candidate(rrc, neighbour->gNB_ID);
-              if (xn) {
-                LOG_I(NR_RRC, "HO LOG: Serving RSRP: %d Best Neighbour RSRP: %d — Trigger Xn HO (assoc_id %d)\n",
-                      servingCellRSRP, best_rsrp, xn->assoc_id);
+              if (rrc_find_xn_candidate(rrc, neighbour->gNB_ID)) {
+                LOG_I(NR_RRC, "HO LOG: Serving RSRP: %d Best Neighbour RSRP: %d — Trigger Xn HO\n", servingCellRSRP, best_rsrp);
                 nr_rrc_trigger_xn_ho(rrc, ue, neighbour);
               } else {
                 LOG_I(NR_RRC, "HO LOG: Serving RSRP: %d Best Neighbour RSRP: %d — Trigger N2 HO (no Xn)\n",
@@ -2890,11 +2888,13 @@ static void rrc_CU_process_ue_context_release_request(MessageDef *msg_p, sctp_as
           .cause_value = 5, // 5 = F1AP_CauseRadioNetwork_interaction_with_other_procedure
       };
       rrc->mac_rrc.ue_context_release_command(assoc_id, &cmd);
+      rrc_gNB_send_XNAP_UE_REMOVE_REQ(rrc, UE);
       nr_rrc_finalize_ho(UE);
       return;
     }
     // if we receive the release request from the target DU (regardless if
     // successful), we assume it is "genuine" and ask the AMF to release
+    rrc_gNB_send_XNAP_UE_REMOVE_REQ(rrc, UE);
     nr_rrc_finalize_ho(UE);
   } else {
     f1_ue_data_t ue_data = cu_get_f1_ue_data(UE->rrc_ue_id);
@@ -2942,6 +2942,8 @@ void rrc_remove_ue(gNB_RRC_INST *rrc, rrc_gNB_ue_context_t *ue_context_p)
    * cover all cases */
   nr_pdcp_remove_UE(UE->rrc_ue_id);
   LOG_I(NR_RRC, "removed UE CU UE ID %u/RNTI %04x \n", UE->rrc_ue_id, UE->rnti);
+  /* UE removed while an Xn HO is still ongoing: XNAP must drop its association too */
+  rrc_gNB_send_XNAP_UE_REMOVE_REQ(rrc, UE);
   rrc_delete_ue_data(UE);
   rrc_gNB_remove_ue_context(rrc, ue_context_p);
 }
@@ -4142,7 +4144,7 @@ void *rrc_gnb_task(void *args_p)
 
       /* Messages from XNAP task */
       case XNAP_SETUP_IND:
-        rrc_add_xn_candidate(RC.nrrrc[instance], XNAP_SETUP_IND(msg_p).gnb_id, XNAP_SETUP_IND(msg_p).assoc_id);
+        rrc_add_xn_candidate(RC.nrrrc[instance], XNAP_SETUP_IND(msg_p).gnb_id);
         break;
 
       case XNAP_PEER_SHUTDOWN_IND:

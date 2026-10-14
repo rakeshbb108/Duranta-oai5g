@@ -9,3 +9,9 @@ target_include_directories(xnap_lib_test PRIVATE
 			   ${CMAKE_SOURCE_DIR}
                            ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+add_executable(xnap_ids_test xnap_ids_test.c ${OPENAIR2_DIR}/XNAP/xnap_ids.c)
+add_dependencies(tests xnap_ids_test)
+add_test(NAME xnap_ids_test COMMAND xnap_ids_test)
+target_link_libraries(xnap_ids_test PRIVATE ds minimal_lib)
+target_include_directories(xnap_ids_test PRIVATE ${CMAKE_SOURCE_DIR})

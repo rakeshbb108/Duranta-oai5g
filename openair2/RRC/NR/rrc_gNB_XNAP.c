@@ -24,7 +24,6 @@
 #include "common/utils/ds/byte_array.h"
 #include "assertions.h"
 #include "openair2/F1AP/f1ap_ids.h"
-#include "openair2/XNAP/xnap_ids.h"
 #include "common/platform_constants.h"
 #include "intertask_interface.h"
 #include "aper_encoder.h"
@@ -63,14 +62,10 @@ bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
                                         const nr_neighbour_cell_t *neighbour,
                                         byte_array_t hoPrepInfo)
 {
-  const rrc_xn_candidate_t *xn = rrc_find_xn_candidate(rrc, neighbour->gNB_ID);
-  if (!xn) {
+  if (!rrc_find_xn_candidate(rrc, neighbour->gNB_ID)) {
     LOG_E(NR_RRC, "UE %d: no Xn connection to gNB_ID 0x%x\n", UE->rrc_ue_id, neighbour->gNB_ID);
     return false;
   }
-
-  /* Allocate the source XnAP UE ID carried in the HandoverRequest */
-  UE->ho_context->source->src_ue_xnap_id = xnap_alloc_ue_id();
 
   /* Build target CGI */
   xnap_ngran_cgi_t target_cgi = {
@@ -197,12 +192,10 @@ bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
     .num_last_visited_cells = num_history,
     .ue_history_info        = history,
     .rrc_ue_id              = UE->rrc_ue_id,
-    .target_assoc_id        = xn->assoc_id,
-    .s_ng_node_ue_xnap_id   = UE->ho_context->source->src_ue_xnap_id,
+    .target_gnb_id          = neighbour->gNB_ID,
   };
 
-  LOG_I(NR_RRC, "UE %d: sending XNAP_HANDOVER_REQ to gNB_ID 0x%x (assoc_id %d) s_xnap_ue_id %u\n",
-        UE->rrc_ue_id, neighbour->gNB_ID, xn->assoc_id, UE->ho_context->source->src_ue_xnap_id);
+  LOG_I(NR_RRC, "UE %d: sending XNAP_HANDOVER_REQ to gNB_ID 0x%x\n", UE->rrc_ue_id, neighbour->gNB_ID);
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
   return true;
 }
@@ -232,7 +225,7 @@ int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t
     LOG_E(NR_RRC, "Xn HandoverRequest: no cell with NR Cell ID 0x%lx\n", req->target_cgi.nrcell_id);
     xnap_cause_t cause = {.type = XNAP_CAUSE_RADIO_NETWORK,
                           .value = XNAP_CAUSE_RADIO_NETWORK_LAYER_CELL_NOT_AVAILABLE};
-    rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(rrc, req->s_ng_node_ue_xnap_id, req->target_assoc_id, cause);
+    rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(rrc, req->xn_token, cause);
     return -1;
   }
 
@@ -241,7 +234,7 @@ int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t
     LOG_E(NR_RRC, "Xn HandoverRequest: no DU for assoc_id %d\n", cell->assoc_id);
     xnap_cause_t cause = {.type = XNAP_CAUSE_RADIO_NETWORK,
                           .value = XNAP_CAUSE_RADIO_NETWORK_LAYER_NO_RADIO_RESOURCES_AVAILABLE_IN_TARGET_CELL};
-    rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(rrc, req->s_ng_node_ue_xnap_id, req->target_assoc_id, cause);
+    rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(rrc, req->xn_token, cause);
     return -1;
   }
 
@@ -249,23 +242,21 @@ int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t
     LOG_E(NR_RRC, "Xn HandoverRequest: no CU-UP associated — rejecting\n");
     xnap_cause_t cause = {.type = XNAP_CAUSE_MISC,
                           .value = XNAP_CAUSE_MISC_NOT_ENOUGH_USER_PLANE_PROCESSING_RESOURCES};
-    rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(rrc, req->s_ng_node_ue_xnap_id, req->target_assoc_id, cause);
+    rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(rrc, req->xn_token, cause);
     return -1;
   }
 
   rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_create_ue_context(du->assoc_id, UINT16_MAX, rrc, UINT64_MAX, UINT32_MAX);
   gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
 
-  LOG_I(NR_RRC, "Xn HandoverRequest: created UE %d for s_xnap_ue_id %u from assoc_id %d\n",
-        UE->rrc_ue_id, req->s_ng_node_ue_xnap_id, req->target_assoc_id);
+  LOG_I(NR_RRC, "Xn HandoverRequest: created UE %d\n", UE->rrc_ue_id);
 
   UE->ho_context = alloc_ho_ctx(HO_CTX_TARGET);
   nr_ho_target_cu_t *target = UE->ho_context->target;
   target->cell                 = cell;
   target->ho_trigger           = nr_rrc_trigger_xn_ho_target;
   target->ue_ho_prep_info      = copy_byte_array(req->ue_context.rrc_context);
-  target->src_ue_xnap_id       = req->s_ng_node_ue_xnap_id;
-  target->source_assoc_id      = req->target_assoc_id; /* at target: "target_assoc_id" == source_assoc_id */
+  target->xn_token             = req->xn_token;
 
   /* Carry UE capabilities forward from the source: unlike N2 HO (where the AMF sends
    * them as a separate NGAP IE), Xn HO only carries them embedded in rrc_context. Without
@@ -340,9 +331,7 @@ int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t
 void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byte_array_t ho_command)
 {
   nr_ho_target_cu_t *target = UE->ho_context->target;
-
-  /* Allocate the target XnAP UE ID carried in the HandoverRequestAcknowledge */
-  target->target_ue_id = xnap_alloc_target_ue_id();
+  DevAssert(target->xn_token != 0);
 
   int num_admitted = seq_arr_size(&UE->pduSessions);
   xnap_pdusession_admitted_item_t *admitted = NULL;
@@ -385,17 +374,16 @@ void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byt
   MessageDef *msg = itti_alloc_new_message(TASK_RRC_GNB, rrc->module_id, XNAP_HANDOVER_REQ_ACK);
   xnap_handover_req_ack_t *ack = &XNAP_HANDOVER_REQ_ACK(msg);
   *ack = (xnap_handover_req_ack_t){
-    .s_ng_node_ue_xnap_id     = target->src_ue_xnap_id,
-    .t_ng_node_ue_xnap_id     = target->target_ue_id,
     .num_pdu_admitted         = num_admitted,
     .pdusession_admitted_list = admitted,
     .target2source            = copy_byte_array(ho_command),
     .rrc_ue_id                = UE->rrc_ue_id,
-    .source_assoc_id          = target->source_assoc_id,
+    .xn_token                 = target->xn_token,
   };
+  /* token consumed: from now on XNAP knows this UE by rrc_ue_id */
+  target->xn_token = 0;
 
-  LOG_I(NR_RRC, "UE %d: sending XNAP_HANDOVER_REQ_ACK s_xnap_ue_id %u t_xnap_ue_id %u source_assoc_id %d\n",
-        UE->rrc_ue_id, target->src_ue_xnap_id, target->target_ue_id, target->source_assoc_id);
+  LOG_I(NR_RRC, "UE %d: sending XNAP_HANDOVER_REQ_ACK\n", UE->rrc_ue_id);
 
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg);
 }
@@ -415,9 +403,6 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
     LOG_W(NR_RRC, "UE %u: Xn HandoverRequestAck but no source handover context — dropping\n", UE->rrc_ue_id);
     return;
   }
-
-  UE->ho_context->source->tar_ue_xnap_id = msg->t_ng_node_ue_xnap_id;
-  UE->ho_context->source->tar_assoc_id   = msg->source_assoc_id;
 
   /* Store per-DRB DL forwarding tunnels received in HO ACK */
   for (int i = 0; i < msg->num_pdu_admitted; i++) {
@@ -511,18 +496,11 @@ int rrc_gNB_send_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
   DevAssert(n_to_mod <= MAX_DRBS_PER_UE);
   DevAssert(drb_ids);
 
-  LOG_I(NR_RRC,
-        "UE %d: sending Xn SN Status Transfer (s_xnap_ue_id=%u t_xnap_ue_id=%u)\n",
-        UE->rrc_ue_id,
-        UE->ho_context->source->src_ue_xnap_id,
-        UE->ho_context->source->tar_ue_xnap_id);
+  LOG_I(NR_RRC, "UE %d: sending Xn SN Status Transfer\n", UE->rrc_ue_id);
 
   bool sn_length_18 = rrc->pdcp_config.drb.sn_size == 18;
 
-  xnap_sn_status_transfer_t msg = {
-    .s_ng_node_ue_xnap_id = UE->ho_context->source->src_ue_xnap_id,
-    .t_ng_node_ue_xnap_id = UE->ho_context->source->tar_ue_xnap_id,
-  };
+  xnap_sn_status_transfer_t msg = {.rrc_ue_id = UE->rrc_ue_id};
 
   for (int i = 0; i < n_to_mod; ++i) {
     int drb_id = drb_ids[i];
@@ -552,31 +530,19 @@ int rrc_gNB_send_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
 }
 
 /** @brief Process incoming SN Status Transfer on target gNB (TS 38.423 §9.1.1.4).
- *  Looks up the UE by t_ng_node_ue_xnap_id and forwards each DRB's PDCP counts
- *  to the target CU-UP via E1AP Bearer Modification. */
+ *  Forwards each DRB's PDCP counts to the target CU-UP via E1AP Bearer Modification. */
 int rrc_gNB_process_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
                                              instance_t instance,
                                              xnap_sn_status_transfer_t *msg)
 {
-  if (!xnap_exists_target_ue_data(msg->t_ng_node_ue_xnap_id)) {
-    LOG_E(NR_RRC, "[gNB %ld] SN Status Transfer: unknown t_xnap_ue_id %u\n",
-          instance, msg->t_ng_node_ue_xnap_id);
-    return -1;
-  }
-  xnap_target_ue_data_t ue_data = xnap_get_target_ue_data(msg->t_ng_node_ue_xnap_id);
-
-  rrc_gNB_ue_context_t *ue_context_p = rrc_gNB_get_ue_context(rrc, ue_data.rrc_ue_id);
+  rrc_gNB_ue_context_t *ue_context_p = rrc_gNB_get_ue_context(rrc, msg->rrc_ue_id);
   if (!ue_context_p) {
-    LOG_E(NR_RRC, "[gNB %ld] SN Status Transfer: no UE context for rrc_ue_id %u (t_xnap_ue_id %u)\n",
-          instance, ue_data.rrc_ue_id, msg->t_ng_node_ue_xnap_id);
+    LOG_E(NR_RRC, "[gNB %ld] SN Status Transfer: no UE context for rrc_ue_id %u\n", instance, msg->rrc_ue_id);
     return -1;
   }
 
   gNB_RRC_UE_t *UE = &ue_context_p->ue_context;
-  LOG_I(NR_RRC,
-        "[gNB %ld] SN Status Transfer: s_xnap_ue_id=%u t_xnap_ue_id=%u nb_drb=%u\n",
-        instance, msg->s_ng_node_ue_xnap_id, msg->t_ng_node_ue_xnap_id,
-        msg->ran_status.nb_drb);
+  LOG_I(NR_RRC, "[gNB %ld] UE %u: SN Status Transfer nb_drb=%u\n", instance, UE->rrc_ue_id, msg->ran_status.nb_drb);
 
   for (int i = 0; i < msg->ran_status.nb_drb; ++i) {
     const xnap_drb_status_t *s = &msg->ran_status.drb_status_list[i];
@@ -666,10 +632,7 @@ void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
   }
   rrc_gNB_stop_xnu_forwarding(rrc, UE, xnu_drb_ids, n_xnu);
 
-  xnap_ue_context_release_t msg = {
-    .s_ng_node_ue_xnap_id = UE->ho_context->target->src_ue_xnap_id,
-    .t_ng_node_ue_xnap_id = UE->ho_context->target->target_ue_id,
-  };
+  xnap_ue_context_release_t msg = {.rrc_ue_id = UE->rrc_ue_id};
 
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_UE_CONTEXT_RELEASE);
   XNAP_UE_CONTEXT_RELEASE(msg_p) = msg;
@@ -682,18 +645,10 @@ int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
                                               instance_t instance,
                                               xnap_ue_context_release_t *msg)
 {
-  if (!xnap_exists_ue_data(msg->s_ng_node_ue_xnap_id)) {
-    LOG_W(NR_RRC, "[gNB %ld] XNAP UE Context Release: unknown s_xnap_ue_id=%u\n",
-          instance, msg->s_ng_node_ue_xnap_id);
-    return -1;
-  }
-  xnap_ue_data_t ue_data = xnap_get_ue_data(msg->s_ng_node_ue_xnap_id);
-  xnap_remove_ue_data(msg->s_ng_node_ue_xnap_id);
-
-  rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, ue_data.rrc_ue_id);
+  rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, msg->rrc_ue_id);
   if (ue_ctx == NULL) {
     LOG_W(NR_RRC, "[gNB %ld] XNAP UE Context Release: unknown UE rrc_ue_id=%u\n",
-          instance, ue_data.rrc_ue_id);
+          instance, msg->rrc_ue_id);
     return -1;
   }
   gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
@@ -784,21 +739,29 @@ void rrc_gNB_process_XNU_FORWARDING_COMPLETE(gNB_RRC_INST *rrc, const gtpv1u_xnu
   free_e1ap_context_mod_request(&req);
 }
 
-/** @brief Send Handover Preparation Failure (TS 38.423 §9.1.1.3) from target to source via Xn. */
-void rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(gNB_RRC_INST *rrc,
-                                             uint32_t s_ng_node_ue_xnap_id,
-                                             sctp_assoc_t assoc_id,
-                                             xnap_cause_t cause)
+/** @brief Send Handover Preparation Failure (TS 38.423 §9.1.1.3) from target to source via Xn.
+ *  xn_token is the one received in XNAP_HANDOVER_REQ; only valid before the Ack was sent. */
+void rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(gNB_RRC_INST *rrc, uint32_t xn_token, xnap_cause_t cause)
 {
-  LOG_I(NR_RRC, "Sending XNAP Handover Preparation Failure for s_xnap_ue_id %u (cause group %d value %d)\n",
-        s_ng_node_ue_xnap_id, cause.type, cause.value);
+  LOG_I(NR_RRC, "Sending XNAP Handover Preparation Failure (cause group %d value %d)\n", cause.type, cause.value);
 
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_HANDOVER_PREP_FAILURE);
   XNAP_HANDOVER_PREP_FAILURE(msg_p) = (xnap_handover_preparation_failure_t){
-    .s_ng_node_ue_xnap_id = s_ng_node_ue_xnap_id,
     .cause = cause,
-    .assoc_id = assoc_id,
+    .xn_token = xn_token,
   };
+  itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
+}
+
+/** @brief Tell XNAP to drop this UE's Xn association locally (no PDU), when an Xn HO
+ *  context is torn down outside the normal end. No-op if the UE has no Xn HO context. */
+void rrc_gNB_send_XNAP_UE_REMOVE_REQ(gNB_RRC_INST *rrc, const gNB_RRC_UE_t *UE)
+{
+  if (UE->ho_context == NULL || !nr_rrc_is_xn_ho(UE->ho_context))
+    return;
+  LOG_I(NR_RRC, "UE %u: Xn HO context torn down, requesting XNAP UE removal\n", UE->rrc_ue_id);
+  MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_UE_REMOVE_REQ);
+  XNAP_UE_REMOVE_REQ(msg_p).rrc_ue_id = UE->rrc_ue_id;
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
 }
 
@@ -868,7 +831,10 @@ int rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(gNB_RRC_INST *rrc, const xnap_h
     return -1;
   }
 
-  LOG_E(NR_RRC, "UE %u: Xn TXnRELOCoverall expired — relocation failed, releasing locally\n", UE->rrc_ue_id);
+  LOG_E(NR_RRC,
+        "UE %u: Xn %s — relocation failed, releasing locally\n",
+        UE->rrc_ue_id,
+        msg->peer_lost ? "peer lost while HO prepared" : "TXnRELOCoverall expired");
 
   nr_rrc_finalize_ho(UE);
 
@@ -891,26 +857,21 @@ int rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(gNB_RRC_INST *rrc, const xnap_h
   return 0;
 }
 
-/* @brief Target gNB processes Handover Cancel from the source gNB.
- * Two cases: after the HandoverRequestAck was sent, the UE is resolved through the
- * target UE mapping (created at Ack generation); before that, no mapping exists and
- * the UE is found by the source XnAP ID stored from the incoming HandoverRequest. */
+/* @brief Target gNB processes Handover Cancel from the source gNB (XNAP already released
+ * its UE association). After the HandoverRequestAck was sent the UE is identified by
+ * rrc_ue_id; before that, by the xn_token received with the HandoverRequest. */
 int rrc_gNB_process_XNAP_HANDOVER_CANCEL(gNB_RRC_INST *rrc, const xnap_handover_cancel_t *msg)
 {
   rrc_gNB_ue_context_t *ue_ctx = NULL;
 
-  uint32_t t_xnap_ue_id = 0;
-  xnap_target_ue_data_t *ue_data = xnap_find_target_ue_by_source_id(msg->s_ng_node_ue_xnap_id, &t_xnap_ue_id);
-  if (ue_data != NULL) {
-    uint32_t rrc_ue_id = ue_data->rrc_ue_id;
-    xnap_remove_target_ue_data(t_xnap_ue_id);
-    ue_ctx = rrc_gNB_get_ue_context(rrc, rrc_ue_id);
+  if (msg->rrc_ue_id != 0) {
+    ue_ctx = rrc_gNB_get_ue_context(rrc, msg->rrc_ue_id);
   } else {
     rrc_gNB_ue_context_t *it = NULL;
     RB_FOREACH(it, rrc_nr_ue_tree_s, &rrc->rrc_ue_head) {
       gNB_RRC_UE_t *cand = &it->ue_context;
-      if (cand->ho_context && cand->ho_context->target
-          && cand->ho_context->target->src_ue_xnap_id == msg->s_ng_node_ue_xnap_id) {
+      if (cand->ho_context && cand->ho_context->target && cand->ho_context->target->xn_token != 0
+          && cand->ho_context->target->xn_token == msg->xn_token) {
         ue_ctx = it;
         break;
       }
@@ -918,8 +879,7 @@ int rrc_gNB_process_XNAP_HANDOVER_CANCEL(gNB_RRC_INST *rrc, const xnap_handover_
   }
 
   if (ue_ctx == NULL) {
-    LOG_W(NR_RRC, "Xn HandoverCancel: no UE for s_xnap_ue_id %u — dropping\n",
-          msg->s_ng_node_ue_xnap_id);
+    LOG_W(NR_RRC, "Xn HandoverCancel: no UE (rrc_ue_id %u) — dropping\n", msg->rrc_ue_id);
     return -1;
   }
 

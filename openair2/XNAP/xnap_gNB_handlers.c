@@ -17,12 +17,42 @@
 #include "aper_decoder.h"
 #include "xnap_gNB_itti_messaging.h"
 
+/* Xn peer lost: tell RRC to end the Xn HO of a UE whose association is being purged,
+ * through the message it already handles for the equivalent outcome. A target UE already
+ * Acked is left alone: it may still arrive over the air and complete via NG Path Switch. */
+static void xnap_notify_rrc_ue_peer_lost(const xn_ue_assoc_t *ue, void *ctx)
+{
+  const instance_t instance = *(const instance_t *)ctx;
+  const xnap_cause_t cause = {.type = XNAP_CAUSE_TRANSPORT, .value = XNAP_CAUSE_TRANSPORT_LAYER_TRANSPORT_RESOURCE_UNAVAILABLE};
+  MessageDef *msg = NULL;
+
+  if (ue->role == XN_ROLE_SOURCE && ue->src_state == XNAP_HO_SRC_HO_REQ_SENT) {
+    msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HANDOVER_PREP_FAILURE);
+    XNAP_HANDOVER_PREP_FAILURE(msg) = (xnap_handover_preparation_failure_t){.cause = cause, .rrc_ue_id = ue->rrc_ue_id};
+  } else if (ue->role == XN_ROLE_SOURCE && ue->src_state == XNAP_HO_SRC_HO_PREPARED) {
+    msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HO_RELOCOVERALL_TIMEOUT);
+    XNAP_HO_RELOCOVERALL_TIMEOUT(msg) = (xnap_ho_relocoverall_timeout_t){.rrc_ue_id = ue->rrc_ue_id, .peer_lost = true};
+  } else if (ue->role == XN_ROLE_TARGET && ue->rrc_ue_id == XN_UE_RRC_ID_UNBOUND) {
+    msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HANDOVER_CANCEL);
+    XNAP_HANDOVER_CANCEL(msg) = (xnap_handover_cancel_t){.cause = cause, .xn_token = ue->local_xnap_id};
+  }
+
+  LOG_W(XNAP, "[gNB %ld] Xn peer lost: dropping xnap_ue_id %u (%s, rrc_ue_id %u)%s\n",
+        instance, ue->local_xnap_id, ue->role == XN_ROLE_SOURCE ? "source" : "target", ue->rrc_ue_id,
+        msg ? " — notifying RRC" : "");
+  if (msg)
+    itti_send_msg_to_task(TASK_RRC_GNB, instance, msg);
+}
+
 /* Notify RRC of a peer's Xn Setup completion or SCTP-level shutdown. */
 void xnap_handle_xn_setup_message(instance_t instance, xnap_peer_t *peer, int sctp_shutdown)
 {
   if (sctp_shutdown) {
     if (peer->state == XNAP_PEER_STATE_CONNECTED || peer->state == XNAP_PEER_STATE_WAITING) {
       LOG_W(XNAP, "[gNB %ld] Xn peer assoc_id %d (gNB_id 0x%x) disconnected\n", instance, peer->assoc_id, peer->remote_gnb_id);
+
+      /* release the Xn UE associations using this link before telling RRC the peer is gone */
+      xn_ue_purge_assoc(peer->assoc_id, xnap_notify_rrc_ue_peer_lost, &instance);
 
       /* Notify RRC only if XnSetup had completed because RRC has an entry,
        * WAITING peers never reached RRC so there is nothing to remove. */
@@ -31,8 +61,6 @@ void xnap_handle_xn_setup_message(instance_t instance, xnap_peer_t *peer, int sc
         XNAP_PEER_SHUTDOWN_IND(msg).gnb_id = peer->remote_gnb_id;
         itti_send_msg_to_task(TASK_RRC_GNB, instance, msg);
       }
-
-      /* TODO: release XNAP UE contexts using this link */
     }
   } else {
     peer->state = XNAP_PEER_STATE_CONNECTED;
@@ -42,7 +70,6 @@ void xnap_handle_xn_setup_message(instance_t instance, xnap_peer_t *peer, int sc
     /* Notify RRC so it can register this peer as an Xn-capable candidate */
     MessageDef *msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_SETUP_IND);
     XNAP_SETUP_IND(msg).gnb_id   = peer->remote_gnb_id;
-    XNAP_SETUP_IND(msg).assoc_id = peer->assoc_id;
     itti_send_msg_to_task(TASK_RRC_GNB, instance, msg);
   }
 }
@@ -220,7 +247,16 @@ static int xnap_gNB_handle_xn_setup_failure(instance_t instance,
 /* Handover Preparation handlers                                        */
 /* ------------------------------------------------------------------ */
 
-/* Source gNB: receives HandoverRequestAck from target — decode, look up rrc_ue_id, forward to RRC */
+/* Source-side entry addressed by an incoming PDU's local (source) XnAP ID, on the peer it came from */
+static xn_ue_assoc_t *xnap_get_source_ue(sctp_assoc_t assoc_id, uint32_t s_xnap_ue_id)
+{
+  xn_ue_assoc_t *ue = xn_ue_get_by_local(s_xnap_ue_id);
+  if (ue == NULL || ue->role != XN_ROLE_SOURCE || ue->assoc_id != assoc_id)
+    return NULL;
+  return ue;
+}
+
+/* Source gNB: receives HandoverRequestAck from target — store the target XnAP ID, forward to RRC */
 static int xnap_gNB_handle_handover_request_acknowledge(instance_t instance,
                                                          sctp_assoc_t assoc_id,
                                                          uint32_t stream,
@@ -239,39 +275,37 @@ static int xnap_gNB_handle_handover_request_acknowledge(instance_t instance,
     return -1;
   }
 
-  /* Look up source UE data using s_ng_node_ue_xnap_id */
-  if (!xnap_exists_ue_data(ack.s_ng_node_ue_xnap_id)) {
-    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: unknown s_xnap_ue_id %u\n",
-          instance, ack.s_ng_node_ue_xnap_id);
+  xn_ue_assoc_t *ue = xnap_get_source_ue(assoc_id, ack.s_ng_node_ue_xnap_id);
+  if (ue == NULL) {
+    LOG_E(XNAP, "[gNB %ld] HandoverRequestAck: unknown s_xnap_ue_id %u on assoc_id %d — dropping\n",
+          instance, ack.s_ng_node_ue_xnap_id, assoc_id);
     free_xnap_handover_request_acknowledge(&ack);
     return -1;
   }
-  xnap_ue_data_t ue_data = xnap_get_ue_data(ack.s_ng_node_ue_xnap_id);
-  xnap_ho_src_result_t r = xnap_ho_src_transition(ue_data.sm_state, XNAP_HO_SRC_EV_HANDOVER_REQUEST_ACK);
+  xnap_ho_src_result_t r = xnap_ho_src_transition(ue->src_state, XNAP_HO_SRC_EV_HANDOVER_REQUEST_ACK);
   if (r.action == XNAP_HO_SRC_ACT_ILLEGAL) {
     free_xnap_handover_request_acknowledge(&ack);
     return -1;
   }
-  xnap_set_ue_target_id(ack.s_ng_node_ue_xnap_id, ack.t_ng_node_ue_xnap_id);
-  xnap_set_ue_sm_state(ack.s_ng_node_ue_xnap_id, r.next_state);
-  xnap_set_ue_timer_mark_relocoverall(ack.s_ng_node_ue_xnap_id, xnap_ho_timers_now());
+  ue->remote_xnap_id = ack.t_ng_node_ue_xnap_id;
+  ue->remote_valid = true;
+  ue->src_state = r.next_state;
+  xnap_ho_src_set_relocoverall_start(&ue->timer_marks, xnap_ho_timers_now());
 
-  /* Populate routing fields for RRC */
-  ack.rrc_ue_id       = ue_data.rrc_ue_id;
-  ack.source_assoc_id = assoc_id; /* not used by source RRC but fill for consistency */
+  ack.rrc_ue_id = ue->rrc_ue_id;
 
   MessageDef *msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HANDOVER_REQ_ACK);
   XNAP_HANDOVER_REQ_ACK(msg) = ack;
 
   LOG_I(XNAP, "[gNB %ld] HandoverRequestAck: rrc_ue_id %u s_xnap_ue_id %u t_xnap_ue_id %u — notifying RRC\n",
-        instance, ue_data.rrc_ue_id, ack.s_ng_node_ue_xnap_id, ack.t_ng_node_ue_xnap_id);
+        instance, ue->rrc_ue_id, ack.s_ng_node_ue_xnap_id, ack.t_ng_node_ue_xnap_id);
 
   itti_send_msg_to_task(TASK_RRC_GNB, instance, msg);
   return 0;
 }
 
-/* Source gNB: receives HandoverPreparationFailure from target — decode, look up rrc_ue_id,
- * drop the UE mapping (the HO preparation is over) and forward to RRC */
+/* Source gNB: receives HandoverPreparationFailure from target — drop the UE
+ * association (the HO preparation is over) and forward to RRC */
 static int xnap_gNB_handle_handover_prep_failure(instance_t instance,
                                                   sctp_assoc_t assoc_id,
                                                   uint32_t stream,
@@ -290,21 +324,18 @@ static int xnap_gNB_handle_handover_prep_failure(instance_t instance,
     return -1;
   }
 
-  if (!xnap_exists_ue_data(fail.s_ng_node_ue_xnap_id)) {
-    LOG_E(XNAP, "[gNB %ld] HandoverPreparationFailure: unknown s_xnap_ue_id %u\n",
-          instance, fail.s_ng_node_ue_xnap_id);
+  xn_ue_assoc_t *ue = xnap_get_source_ue(assoc_id, fail.s_ng_node_ue_xnap_id);
+  if (ue == NULL) {
+    LOG_E(XNAP, "[gNB %ld] HandoverPreparationFailure: unknown s_xnap_ue_id %u on assoc_id %d — dropping\n",
+          instance, fail.s_ng_node_ue_xnap_id, assoc_id);
     return -1;
   }
-  xnap_ue_data_t ue_data = xnap_get_ue_data(fail.s_ng_node_ue_xnap_id);
-  xnap_ho_src_result_t r = xnap_ho_src_transition(ue_data.sm_state, XNAP_HO_SRC_EV_HANDOVER_PREP_FAILURE);
-  xnap_ho_timer_untrack(fail.s_ng_node_ue_xnap_id);
-  xnap_remove_ue_data(fail.s_ng_node_ue_xnap_id);
-
+  xnap_ho_src_result_t r = xnap_ho_src_transition(ue->src_state, XNAP_HO_SRC_EV_HANDOVER_PREP_FAILURE);
   if (r.action == XNAP_HO_SRC_ACT_ILLEGAL)
     return -1;
 
-  fail.rrc_ue_id = ue_data.rrc_ue_id;
-  fail.assoc_id  = assoc_id;
+  fail.rrc_ue_id = ue->rrc_ue_id;
+  xn_ue_remove(ue->local_xnap_id);
 
   LOG_W(XNAP, "[gNB %ld] HandoverPreparationFailure: rrc_ue_id %u s_xnap_ue_id %u cause group %d value %d — notifying RRC\n",
         instance, fail.rrc_ue_id, fail.s_ng_node_ue_xnap_id, fail.cause.type, fail.cause.value);
@@ -315,7 +346,8 @@ static int xnap_gNB_handle_handover_prep_failure(instance_t instance,
   return 0;
 }
 
-/* Target gNB: receives HandoverRequest from source — decode and forward to RRC */
+/* Target gNB: receives HandoverRequest from source — allocate the target XnAP ID,
+ * create a pending entry and forward to RRC with the ID as opaque xn_token */
 static int xnap_gNB_handle_handover_request(instance_t instance,
                                                  sctp_assoc_t assoc_id,
                                                  uint32_t stream,
@@ -337,8 +369,28 @@ static int xnap_gNB_handle_handover_request(instance_t instance,
     return -1;
   }
 
-  /* Pass the source assoc_id so RRC can route the ACK back */
-  req->target_assoc_id = assoc_id;
+  if (xn_ue_get_target_by_remote(assoc_id, req->s_ng_node_ue_xnap_id) != NULL) {
+    LOG_W(XNAP, "[gNB %ld] HandoverRequest: s_xnap_ue_id %u on assoc_id %d already in progress — dropping\n",
+          instance, req->s_ng_node_ue_xnap_id, assoc_id);
+    free_xnap_handover_request(req);
+    itti_free(TASK_XNAP, msg);
+    return -1;
+  }
+
+  xnap_ho_tgt_result_t r = xnap_ho_tgt_transition(XNAP_HO_TGT_XN_READY, XNAP_HO_TGT_EV_HANDOVER_REQUEST);
+  xn_ue_assoc_t ue = {.local_xnap_id = xn_ue_alloc_local_id(),
+                      .remote_xnap_id = req->s_ng_node_ue_xnap_id,
+                      .remote_valid = true,
+                      .rrc_ue_id = XN_UE_RRC_ID_UNBOUND,
+                      .role = XN_ROLE_TARGET,
+                      .assoc_id = assoc_id,
+                      .tgt_state = r.next_state};
+  bool ok = xn_ue_add(&ue);
+  AssertFatal(ok, "[gNB %ld] Failed to store UE data for xnap_ue_id %u\n", instance, ue.local_xnap_id);
+  req->xn_token = ue.local_xnap_id;
+
+  LOG_I(XNAP, "[gNB %ld] HandoverRequest: s_xnap_ue_id %u -> t_xnap_ue_id %u (pending admission) — notifying RRC\n",
+        instance, ue.remote_xnap_id, ue.local_xnap_id);
 
   itti_send_msg_to_task(TASK_RRC_GNB, instance, msg);
   return 0;
@@ -348,7 +400,7 @@ static int xnap_gNB_handle_handover_request(instance_t instance,
 /* SN Status Transfer handler                                           */
 /* ------------------------------------------------------------------ */
 
-/* Target gNB: receives SN Status Transfer from source — decode and forward to RRC */
+/* Target gNB: receives SN Status Transfer from source — resolve rrc_ue_id and forward to RRC */
 static int xnap_gNB_handle_sn_status_transfer(instance_t instance,
                                                sctp_assoc_t assoc_id,
                                                uint32_t stream,
@@ -367,6 +419,18 @@ static int xnap_gNB_handle_sn_status_transfer(instance_t instance,
     return -1;
   }
 
+  const xn_ue_assoc_t *ue = xn_ue_get_by_local(msg.t_ng_node_ue_xnap_id);
+  if (ue == NULL || ue->role != XN_ROLE_TARGET || ue->assoc_id != assoc_id || ue->rrc_ue_id == XN_UE_RRC_ID_UNBOUND
+      || ue->remote_xnap_id != msg.s_ng_node_ue_xnap_id) {
+    LOG_E(XNAP, "[gNB %ld] SN Status Transfer: unknown s_xnap_ue_id %u / t_xnap_ue_id %u on assoc_id %d — dropping\n",
+          instance, msg.s_ng_node_ue_xnap_id, msg.t_ng_node_ue_xnap_id, assoc_id);
+    return -1;
+  }
+  msg.rrc_ue_id = ue->rrc_ue_id;
+
+  LOG_I(XNAP, "[gNB %ld] SN Status Transfer: s_xnap_ue_id %u t_xnap_ue_id %u rrc_ue_id %u nb_drb %u\n",
+        instance, msg.s_ng_node_ue_xnap_id, msg.t_ng_node_ue_xnap_id, msg.rrc_ue_id, msg.ran_status.nb_drb);
+
   MessageDef *itti_msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_SN_STATUS_TRANSFER);
   XNAP_SN_STATUS_TRANSFER(itti_msg) = msg;
   itti_send_msg_to_task(TASK_RRC_GNB, instance, itti_msg);
@@ -377,7 +441,7 @@ static int xnap_gNB_handle_sn_status_transfer(instance_t instance,
 /* UE Context Release handler                                           */
 /* ------------------------------------------------------------------ */
 
-/* Source gNB: receives UE Context Release from target — decode and forward to RRC */
+/* Source gNB: receives UE Context Release from target — drop the UE association, forward to RRC */
 static int xnap_gNB_handle_ue_context_release(instance_t instance,
                                                sctp_assoc_t assoc_id,
                                                uint32_t stream,
@@ -396,16 +460,21 @@ static int xnap_gNB_handle_ue_context_release(instance_t instance,
     return -1;
   }
 
-  /* RRC still resolves rrc_ue_id and removes the xnap_ue_data entry itself
-   * (rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE) — this only updates/guards sm_state. */
-  if (xnap_exists_ue_data(msg.s_ng_node_ue_xnap_id)) {
-    xnap_ue_data_t ue_data = xnap_get_ue_data(msg.s_ng_node_ue_xnap_id);
-    xnap_ho_src_result_t r = xnap_ho_src_transition(ue_data.sm_state, XNAP_HO_SRC_EV_UE_CONTEXT_RELEASE);
-    if (r.action == XNAP_HO_SRC_ACT_ILLEGAL)
-      return -1;
-    xnap_set_ue_sm_state(msg.s_ng_node_ue_xnap_id, r.next_state);
-    xnap_ho_timer_untrack(msg.s_ng_node_ue_xnap_id);
+  xn_ue_assoc_t *ue = xnap_get_source_ue(assoc_id, msg.s_ng_node_ue_xnap_id);
+  if (ue == NULL || !ue->remote_valid || ue->remote_xnap_id != msg.t_ng_node_ue_xnap_id) {
+    LOG_W(XNAP, "[gNB %ld] UE Context Release: unknown s_xnap_ue_id %u / t_xnap_ue_id %u on assoc_id %d — dropping\n",
+          instance, msg.s_ng_node_ue_xnap_id, msg.t_ng_node_ue_xnap_id, assoc_id);
+    return -1;
   }
+  xnap_ho_src_result_t r = xnap_ho_src_transition(ue->src_state, XNAP_HO_SRC_EV_UE_CONTEXT_RELEASE);
+  if (r.action == XNAP_HO_SRC_ACT_ILLEGAL)
+    return -1;
+
+  msg.rrc_ue_id = ue->rrc_ue_id;
+  xn_ue_remove(ue->local_xnap_id);
+
+  LOG_I(XNAP, "[gNB %ld] UE Context Release: s_xnap_ue_id %u t_xnap_ue_id %u rrc_ue_id %u — notifying RRC\n",
+        instance, msg.s_ng_node_ue_xnap_id, msg.t_ng_node_ue_xnap_id, msg.rrc_ue_id);
 
   MessageDef *itti_msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_UE_CONTEXT_RELEASE);
   XNAP_UE_CONTEXT_RELEASE(itti_msg) = msg;
@@ -417,7 +486,8 @@ static int xnap_gNB_handle_ue_context_release(instance_t instance,
 /* Handover Cancel handler                                              */
 /* ------------------------------------------------------------------ */
 
-/* Target gNB: receives HandoverCancel from source — decode and forward to RRC */
+/* Target gNB: receives HandoverCancel from source — release the reserved UE association
+ * (Class 2, no reply) and tell RRC: by rrc_ue_id after the Ack, by xn_token before it */
 static int xnap_gNB_handle_handover_cancel(instance_t instance,
                                             sctp_assoc_t assoc_id,
                                             uint32_t stream,
@@ -436,20 +506,26 @@ static int xnap_gNB_handle_handover_cancel(instance_t instance,
     return -1;
   }
 
-  /* Guard only applies once an entry exists (post-Ack, keyed by
-   * t_ng_node_ue_xnap_id — Cancel itself only carries s_ng_node_ue_xnap_id).
-   * Pre-Ack (no early t_xnap_ue_id allocation) stays untracked: forward as
-   * today and let RRC's existing UE-tree fallback scan resolve it. */
-  uint32_t t_xnap_ue_id = 0;
-  xnap_target_ue_data_t *found = xnap_find_target_ue_by_source_id(msg.s_ng_node_ue_xnap_id, &t_xnap_ue_id);
-  if (found != NULL) {
-    xnap_ho_tgt_result_t r = xnap_ho_tgt_transition(found->sm_state, XNAP_HO_TGT_EV_HANDOVER_CANCEL);
-    if (r.action == XNAP_HO_TGT_ACT_ILLEGAL) {
-      LOG_W(XNAP, "[gNB %ld] HandoverCancel: stale/late cancel for t_xnap_ue_id %u (sm_state %d) — dropping\n",
-            instance, t_xnap_ue_id, found->sm_state);
-      return -1;
-    }
+  xn_ue_assoc_t *ue = xn_ue_get_target_by_remote(assoc_id, msg.s_ng_node_ue_xnap_id);
+  if (ue == NULL) {
+    LOG_W(XNAP, "[gNB %ld] HandoverCancel: unknown s_xnap_ue_id %u on assoc_id %d — dropping\n",
+          instance, msg.s_ng_node_ue_xnap_id, assoc_id);
+    return -1;
   }
+  xnap_ho_tgt_result_t r = xnap_ho_tgt_transition(ue->tgt_state, XNAP_HO_TGT_EV_HANDOVER_CANCEL);
+  if (r.action == XNAP_HO_TGT_ACT_ILLEGAL) {
+    LOG_W(XNAP, "[gNB %ld] HandoverCancel: stale/late cancel for t_xnap_ue_id %u (sm_state %d) — dropping\n",
+          instance, ue->local_xnap_id, ue->tgt_state);
+    return -1;
+  }
+
+  if (ue->rrc_ue_id != XN_UE_RRC_ID_UNBOUND)
+    msg.rrc_ue_id = ue->rrc_ue_id;
+  else
+    msg.xn_token = ue->local_xnap_id;
+  LOG_W(XNAP, "[gNB %ld] HandoverCancel: s_xnap_ue_id %u t_xnap_ue_id %u rrc_ue_id %u — notifying RRC\n",
+        instance, msg.s_ng_node_ue_xnap_id, ue->local_xnap_id, ue->rrc_ue_id);
+  xn_ue_remove(ue->local_xnap_id);
 
   MessageDef *itti_msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HANDOVER_CANCEL);
   XNAP_HANDOVER_CANCEL(itti_msg) = msg;

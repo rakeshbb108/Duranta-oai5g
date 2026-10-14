@@ -46,11 +46,6 @@ typedef struct nr_ho_source_cu {
   ho_status_transfer_t ho_status_transfer;
   /// old (source) downlink tunnel
   gtpu_tunnel_t old_du_tunnel_config;
-  /* Xn HO routing: allocated when sending HandoverRequest */
-  uint32_t     src_ue_xnap_id; /* source NG-RAN node UE XnAP ID */
-  /* Xn HO routing: set after receiving HandoverRequestAcknowledge */
-  uint32_t     tar_ue_xnap_id; /* target NG-RAN node UE XnAP ID */
-  sctp_assoc_t tar_assoc_id;   /* SCTP association to the target gNB */
 } nr_ho_source_cu_t;
 
 /* acknowledgement of handover request. buf+len is the RRC Reconfiguration */
@@ -82,11 +77,9 @@ typedef struct nr_ho_target_cu {
   ho_reconfig_ack_t ho_release_source;
   /// function pointer to announce the handover failure
   ho_failure_t ho_failure;
-  /* Xn HO routing: set in rrc_gNB_process_XNAP_HANDOVER_REQUEST, used by
-   * nr_rrc_xn_ho_acknowledge to build XNAP_HANDOVER_REQ_ACK. */
-  uint32_t     src_ue_xnap_id; /* source XnAP UE ID from incoming HandoverRequest */
-  uint32_t     target_ue_id;   /* target XnAP UE ID, allocated when sending HandoverRequestAcknowledge */
-  sctp_assoc_t source_assoc_id;       /* SCTP association back to the source gNB */
+  /// Xn only: opaque token from XNAP_HANDOVER_REQ, echoed once in HANDOVER_REQ_ACK or
+  /// HANDOVER_PREP_FAILURE; 0 once consumed
+  uint32_t xn_token;
 } nr_ho_target_cu_t;
 
 typedef struct nr_handover_context_s {
@@ -106,6 +99,7 @@ void nr_rrc_n2_ho_failure(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE);
 
 void nr_rrc_trigger_n2_ho(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue, const nr_neighbour_cell_t *neighbour_config);
 void nr_rrc_trigger_xn_ho(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue, const nr_neighbour_cell_t *neighbour);
+bool nr_rrc_is_xn_ho(const nr_handover_context_t *ho);
 
 void rrc_gNB_trigger_reconfiguration_for_handover(gNB_RRC_INST *rrc, gNB_RRC_UE_t *ue, uint8_t *rrc_reconf, int rrc_reconf_len);
 
@@ -118,7 +112,7 @@ void nr_rrc_apply_target_context(gNB_RRC_UE_t *UE);
 
 bool nr_rrc_update_cell_assoc_after_ho(gNB_RRC_UE_t *UE);
 
-void rrc_add_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id, sctp_assoc_t assoc_id);
+void rrc_add_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id);
 void rrc_remove_xn_candidate(gNB_RRC_INST *rrc, uint32_t gnb_id);
 const rrc_xn_candidate_t *rrc_find_xn_candidate(const gNB_RRC_INST *rrc, uint32_t gnb_id);
 

@@ -22,8 +22,8 @@
  * (xnap_gNB_handle_register_gnb). Durations in milliseconds. */
 void xnap_ho_timers_init(uint32_t t_xn_reloc_prep_ms, uint32_t t_xn_reloc_overall_ms);
 
-/* Current shared tick (ms), for marking a timer start (xnap_ids.h's
- * xnap_set_ue_timer_mark_relocprep()/_relocoverall()). */
+/* Current shared tick (ms), for marking a timer start (xn_ue_assoc_t.timer_marks,
+ * xnap_ho_src_set_relocprep_start()/_relocoverall_start()). */
 uint64_t xnap_ho_timers_now(void);
 
 /* Call on every XNAP_HO_TIMER_TICK (see xnap_gNB.c): advances the shared
