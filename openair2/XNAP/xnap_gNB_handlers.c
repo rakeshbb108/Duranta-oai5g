@@ -28,7 +28,7 @@ static void xnap_notify_rrc_ue_peer_lost(const xn_ue_assoc_t *ue, void *ctx)
 
   if (ue->role == XN_ROLE_SOURCE && ue->src_state == XNAP_HO_SRC_HO_REQ_SENT) {
     msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HANDOVER_PREP_FAILURE);
-    XNAP_HANDOVER_PREP_FAILURE(msg) = (xnap_handover_preparation_failure_t){.cause = cause, .rrc_ue_id = ue->rrc_ue_id};
+    XNAP_HANDOVER_PREP_FAILURE(msg) = (xnap_handover_preparation_failure_t){.cause = cause, .rrc_ue_id = ue->rrc_ue_id, .local = true};
   } else if (ue->role == XN_ROLE_SOURCE && ue->src_state == XNAP_HO_SRC_HO_PREPARED) {
     msg = itti_alloc_new_message(TASK_XNAP, instance, XNAP_HO_RELOCOVERALL_TIMEOUT);
     XNAP_HO_RELOCOVERALL_TIMEOUT(msg) = (xnap_ho_relocoverall_timeout_t){.rrc_ue_id = ue->rrc_ue_id, .peer_lost = true};

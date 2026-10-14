@@ -782,8 +782,12 @@ int rrc_gNB_process_XNAP_HANDOVER_PREP_FAILURE(gNB_RRC_INST *rrc, const xnap_han
     return -1;
   }
 
-  LOG_E(NR_RRC, "UE %u: Xn Handover Preparation Failure from target (cause group %d value %d) — HO aborted, UE stays on source\n",
-        UE->rrc_ue_id, msg->cause.type, msg->cause.value);
+  LOG_E(NR_RRC,
+        "UE %u: Xn Handover Preparation Failure %s (cause group %d value %d) — HO aborted, UE stays on source\n",
+        UE->rrc_ue_id,
+        msg->local ? "local (no or lost Xn peer)" : "from target",
+        msg->cause.type,
+        msg->cause.value);
 
   nr_rrc_finalize_ho(UE);
   return 0;

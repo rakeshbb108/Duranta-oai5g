@@ -107,6 +107,7 @@ static void xnap_notify_rrc_local_prep_failure(instance_t instance, uint32_t rrc
   XNAP_HANDOVER_PREP_FAILURE(msg) = (xnap_handover_preparation_failure_t){
     .cause = {.type = XNAP_CAUSE_TRANSPORT, .value = XNAP_CAUSE_TRANSPORT_LAYER_TRANSPORT_RESOURCE_UNAVAILABLE},
     .rrc_ue_id = rrc_ue_id,
+    .local = true,
   };
   itti_send_msg_to_task(TASK_RRC_GNB, instance, msg);
 }
