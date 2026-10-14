@@ -812,11 +812,11 @@ int rrc_gNB_process_XNAP_HO_RELOCPREP_TIMEOUT(gNB_RRC_INST *rrc, const xnap_ho_r
   return 0;
 }
 
-/* @brief TXnRELOCoverall expired before UE Context Release arrived (TS 38.423 §8.2.1.2).
- * The UE was already told to reconfigure to the target (RRCReconfiguration was sent when
- * the Ack was processed), so unlike prep timeout this is not "stay on source" — release
- * locally exactly as if UE Context Release had arrived, since the source can no longer
- * assume it is serving this UE. */
+/* @brief TXnRELOCoverall expired before UE Context Release arrived (TS 38.423 §8.2.1.2),
+ * or the Xn peer was lost while prepared. The UE was already told to reconfigure to the
+ * target, so the source can no longer assume it serves this UE: ask the AMF to release
+ * the UE context (TS 38.413 §8.3.2, cause "TXnRELOCOverall Expiry"); the UE Context
+ * Release Command then releases E1/F1 and the UE as for any AMF-initiated release. */
 int rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(gNB_RRC_INST *rrc, const xnap_ho_relocoverall_timeout_t *msg)
 {
   rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, msg->rrc_ue_id);
@@ -832,28 +832,17 @@ int rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(gNB_RRC_INST *rrc, const xnap_h
   }
 
   LOG_E(NR_RRC,
-        "UE %u: Xn %s — relocation failed, releasing locally\n",
+        "UE %u: Xn %s — relocation failed, requesting UE context release from AMF\n",
         UE->rrc_ue_id,
         msg->peer_lost ? "peer lost while HO prepared" : "TXnRELOCoverall expired");
 
   nr_rrc_finalize_ho(UE);
 
-  if (ue_associated_to_cuup(UE)) {
-    sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
-    e1ap_cause_t cause = {.type = E1AP_CAUSE_RADIO_NETWORK, .value = E1AP_RADIO_CAUSE_NORMAL_RELEASE};
-    e1ap_bearer_release_cmd_t cmd = {
-      .gNB_cu_cp_ue_id = UE->rrc_ue_id,
-      .gNB_cu_up_ue_id = UE->rrc_ue_id,
-      .cause = cause,
-    };
-    rrc->cucp_cuup.bearer_context_release(assoc_id, &cmd);
-  }
-
-  if (cu_exists_f1_ue_data(UE->rrc_ue_id) && cu_get_f1_ue_data(UE->rrc_ue_id).du_assoc_id != 0)
-    rrc_gNB_generate_RRCRelease(rrc, UE);
-  else
-    rrc_remove_ue(rrc, ue_ctx);
-
+  const ngap_cause_t cause = msg->peer_lost
+                                 ? (ngap_cause_t){.type = NGAP_CAUSE_TRANSPORT, .value = NGAP_CAUSE_TRANSPORT_RESOURCE_UNAVAILABLE}
+                                 : (ngap_cause_t){.type = NGAP_CAUSE_RADIO_NETWORK,
+                                                  .value = NGAP_CAUSE_RADIO_NETWORK_TXNRELOCOVERALL_EXPIRY};
+  rrc_gNB_send_NGAP_UE_CONTEXT_RELEASE_REQ(rrc->module_id, ue_ctx, cause);
   return 0;
 }
 
