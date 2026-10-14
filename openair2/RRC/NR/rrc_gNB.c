@@ -4142,6 +4142,10 @@ void *rrc_gnb_task(void *args_p)
                                                                   &NGAP_PATH_SWITCH_REQ_ACK(msg_p));
         break;
 
+      case NGAP_PATH_SWITCH_REQ_FAILURE:
+        rrc_gNB_process_NGAP_PATH_SWITCH_REQUEST_FAILURE(RC.nrrrc[instance], &NGAP_PATH_SWITCH_REQ_FAILURE(msg_p));
+        break;
+
       /* Messages from XNAP task */
       case XNAP_SETUP_IND:
         rrc_add_xn_candidate(RC.nrrrc[instance], XNAP_SETUP_IND(msg_p).gnb_id);

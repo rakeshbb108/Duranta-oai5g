@@ -99,5 +99,6 @@ void rrc_gNB_send_NGAP_PATH_SWITCH_REQUEST(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE);
 int rrc_gNB_process_NGAP_PATH_SWITCH_REQUEST_ACKNOWLEDGEMENT(gNB_RRC_INST *rrc,
                                                               instance_t instance,
                                                               ngap_path_switch_req_ack_t *msg);
+int rrc_gNB_process_NGAP_PATH_SWITCH_REQUEST_FAILURE(gNB_RRC_INST *rrc, const ngap_path_switch_req_failure_t *msg);
 
 #endif

@@ -70,6 +70,7 @@
 #include "s1ap_messages_types.h"
 #include "uper_encoder.h"
 #include "rrc_gNB_mobility.h"
+#include "rrc_gNB_XNAP.h"
 #include "rrc_gNB_du.h"
 #include "rrc_cell_management.h"
 #include "common/utils/alg/find.h"
@@ -2332,5 +2333,40 @@ int rrc_gNB_process_NGAP_PATH_SWITCH_REQUEST_ACKNOWLEDGEMENT(gNB_RRC_INST *rrc,
   UE->ho_context->target->ho_release_source(rrc, UE);
   /* ho_context freed inside ho_release_source (rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE) */
 
+  return 0;
+}
+
+/* @brief The AMF rejected the path switch (TS 38.413 §8.4.4.3): the target cannot
+ * serve the UE, so release it locally. The NGAP UE context is detached once the DU
+ * confirms the F1 release; XNAP drops its entry, the source releases on its own
+ * TXnRELOCoverall expiry. */
+int rrc_gNB_process_NGAP_PATH_SWITCH_REQUEST_FAILURE(gNB_RRC_INST *rrc, const ngap_path_switch_req_failure_t *msg)
+{
+  rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, msg->gNB_ue_ngap_id);
+  if (ue_ctx == NULL) {
+    LOG_E(NR_RRC, "Path Switch Request Failure: no UE context for gNB_ue_ngap_id %u\n", msg->gNB_ue_ngap_id);
+    return -1;
+  }
+  gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
+  LOG_E(NR_RRC, "UE %u: NGAP Path Switch Request Failure, releasing UE\n", UE->rrc_ue_id);
+
+  if (UE->ho_context != NULL) {
+    rrc_gNB_send_XNAP_UE_REMOVE_REQ(rrc, UE);
+    nr_rrc_finalize_ho(UE);
+  }
+
+  if (ue_associated_to_cuup(UE)) {
+    e1ap_bearer_release_cmd_t cmd = {
+      .gNB_cu_cp_ue_id = UE->rrc_ue_id,
+      .gNB_cu_up_ue_id = UE->rrc_ue_id,
+      .cause = {.type = E1AP_CAUSE_RADIO_NETWORK, .value = E1AP_RADIO_CAUSE_NORMAL_RELEASE},
+    };
+    rrc->cucp_cuup.bearer_context_release(get_existing_cuup_for_ue(UE), &cmd);
+  }
+
+  if (cu_exists_f1_ue_data(UE->rrc_ue_id) && cu_get_f1_ue_data(UE->rrc_ue_id).du_assoc_id != 0)
+    rrc_gNB_generate_RRCRelease(rrc, UE);
+  else
+    rrc_remove_ue(rrc, ue_ctx);
   return 0;
 }

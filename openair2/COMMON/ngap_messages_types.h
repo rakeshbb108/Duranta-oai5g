@@ -50,6 +50,7 @@
 #define NGAP_HANDOVER_CANCEL_ACK(mSGpTR) (mSGpTR)->ittiMsg.ngap_handover_cancel_ack
 #define NGAP_PATH_SWITCH_REQ(mSGpTR) (mSGpTR)->ittiMsg.ngap_path_switch_req
 #define NGAP_PATH_SWITCH_REQ_ACK(mSGpTR) (mSGpTR)->ittiMsg.ngap_path_switch_req_ack
+#define NGAP_PATH_SWITCH_REQ_FAILURE(mSGpTR) (mSGpTR)->ittiMsg.ngap_path_switch_req_failure
 
 #define NGAP_UE_CONTEXT_RELEASE_REQ(mSGpTR)     (mSGpTR)->ittiMsg.ngap_ue_release_req
 #define NGAP_PDUSESSION_RELEASE_COMMAND(mSGpTR)      (mSGpTR)->ittiMsg.ngap_pdusession_release_command
@@ -755,6 +756,14 @@ typedef struct ngap_path_switch_req_ack_s {
   uint8_t nb_allowed_nssais;
   nssai_t allowed_nssai[NR_MAX_NB_ALLOWED_SNSSAI];
 } ngap_path_switch_req_ack_t;
+
+/* Path Switch Request Failure 9.2.3.10 3GPP TS 38.413 */
+typedef struct ngap_path_switch_req_failure_s {
+  // AMF UE NGAP ID (M)
+  uint64_t amf_ue_ngap_id;
+  // RAN UE NGAP ID (M)
+  uint32_t gNB_ue_ngap_id;
+} ngap_path_switch_req_failure_t;
 
 typedef struct ngap_ue_cap_info_ind_s {
   uint32_t  gNB_ue_ngap_id;

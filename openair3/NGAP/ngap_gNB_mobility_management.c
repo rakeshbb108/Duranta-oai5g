@@ -841,6 +841,24 @@ void free_ng_path_switch_req_ack(ngap_path_switch_req_ack_t *msg)
   }
 }
 
+/** @brief Decode NGAP Path Switch Request Failure (9.2.3.10 3GPP TS 38.413) */
+int decode_ng_path_switch_request_failure(ngap_path_switch_req_failure_t *msg, NGAP_NGAP_PDU_t *pdu)
+{
+  DevAssert(pdu != NULL);
+  NGAP_PathSwitchRequestFailureIEs_t *ie;
+  NGAP_PathSwitchRequestFailure_t *container = &pdu->choice.unsuccessfulOutcome->value.choice.PathSwitchRequestFailure;
+
+  // AMF UE NGAP ID (M)
+  NGAP_FIND_PROTOCOLIE_BY_ID(NGAP_PathSwitchRequestFailureIEs_t, ie, container, NGAP_ProtocolIE_ID_id_AMF_UE_NGAP_ID, true);
+  asn_INTEGER2ulong(&(ie->value.choice.AMF_UE_NGAP_ID), &msg->amf_ue_ngap_id);
+
+  // RAN UE NGAP ID (M)
+  NGAP_FIND_PROTOCOLIE_BY_ID(NGAP_PathSwitchRequestFailureIEs_t, ie, container, NGAP_ProtocolIE_ID_id_RAN_UE_NGAP_ID, true);
+  msg->gNB_ue_ngap_id = ie->value.choice.RAN_UE_NGAP_ID;
+
+  return 0;
+}
+
 /** @brief Decode NGAP Path Switch Request Acknowledge (9.2.3.9 3GPP TS 38.413) */
 int decode_ng_path_switch_request_acknowledge(ngap_path_switch_req_ack_t *msg, NGAP_NGAP_PDU_t *pdu)
 {

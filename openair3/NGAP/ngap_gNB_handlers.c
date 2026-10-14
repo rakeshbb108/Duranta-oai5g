@@ -1186,6 +1186,41 @@ static int ngap_gNB_handle_ng_path_switch_request_ack(sctp_assoc_t assoc_id, uin
   return 0;
 }
 
+/** @brief Handler for NGAP Path Switch Request Failure
+ *   AMF -> NG-RAN Node */
+static int ngap_gNB_handle_ng_path_switch_request_failure(sctp_assoc_t assoc_id, uint32_t stream, NGAP_NGAP_PDU_t *pdu)
+{
+  NGAP_WARN("Received NG Path Switch Request Failure\n");
+  ngap_gNB_amf_data_t *amf_desc_p = NULL;
+  DevAssert(pdu != NULL);
+
+  if ((amf_desc_p = ngap_gNB_get_AMF(NULL, assoc_id, 0)) == NULL) {
+    NGAP_ERROR("[SCTP %u] Received Path Switch Request Failure for non existing AMF context\n", assoc_id);
+    return -1;
+  }
+  MessageDef *message_p = itti_alloc_new_message(TASK_NGAP, 0, NGAP_PATH_SWITCH_REQ_FAILURE);
+  ngap_path_switch_req_failure_t *msg = &NGAP_PATH_SWITCH_REQ_FAILURE(message_p);
+  memset(msg, 0, sizeof(*msg));
+  if (decode_ng_path_switch_request_failure(msg, pdu) < 0) {
+    NGAP_ERROR("Failed to decode NG Path Switch Request Failure\n");
+    itti_free(TASK_NGAP, message_p);
+    return -1;
+  }
+
+  ngap_gNB_ue_context_t *ue_desc_p = ngap_get_ue_context(msg->gNB_ue_ngap_id);
+  if (!ue_desc_p) {
+    NGAP_ERROR("[SCTP %u] Received Path Switch Request Failure for non existing UE context (gNB_ue_ngap_id %d)\n",
+               assoc_id,
+               msg->gNB_ue_ngap_id);
+    itti_free(TASK_NGAP, message_p);
+    return -1;
+  }
+  ue_desc_p->rx_stream = stream;
+
+  itti_send_msg_to_task(TASK_RRC_GNB, amf_desc_p->ngap_gNB_instance->instance, message_p);
+  return 0;
+}
+
 /**
  * @brief Handle NGAP Paging message from AMF
  * @param assoc_id SCTP association ID
@@ -1632,7 +1667,7 @@ const ngap_message_decoded_callback ngap_messages_callback[][3] = {
     {0, 0, 0}, /* OverloadStart */
     {0, 0, 0}, /* OverloadStop */
     {ngap_gNB_handle_paging, 0, 0}, /* Paging */
-    {0, ngap_gNB_handle_ng_path_switch_request_ack, 0}, /* PathSwitchRequest */
+    {0, ngap_gNB_handle_ng_path_switch_request_ack, ngap_gNB_handle_ng_path_switch_request_failure}, /* PathSwitchRequest */
     {ngap_gNB_handle_pdusession_modify_request, 0, 0}, /* PDUSessionResourceModify */
     {0, 0, 0}, /* PDUSessionResourceModifyIndication */
     {ngap_gNB_handle_pdusession_release_command, 0, 0}, /* PDUSessionResourceRelease */
