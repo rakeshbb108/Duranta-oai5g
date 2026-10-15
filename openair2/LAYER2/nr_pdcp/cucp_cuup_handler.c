@@ -91,6 +91,7 @@ static NR_DRB_ToAddMod_t *get_rrc_drb_to_addmod(const DRB_nGRAN_to_setup_t *drb,
 static void cuup_release_pdu_session_up(uint32_t ue_id, int pdusession_id);
 static void n3_end_marker(ue_id_t ue_id, int pdusession_id);
 static void xnu_fwd_end_marker(ue_id_t ue_id, int drb_id);
+static void xnu_forward_timeout(void *data, ue_id_t ue_id, int drb_id);
 
 /** @brief N3 GTP-U Error Indication callback (TS 29.281 clause 7.3.1)
  * TS 23.527 clause 5.3.3.1: 5G-AN shall release PDU session resources immediately
@@ -461,7 +462,7 @@ static void e1_start_xnu_forwarding(uint32_t ue_id, int drb_id, const UP_TL_info
   transport_layer_addr_t addr = {.length = 32};
   memcpy(addr.buffer, &tnl->tlAddress, sizeof(in_addr_t));
   newGtpuCreateTunnel(xnuinst, ue_id, drb_id, drb_id, tnl->teId, addr, xnu_fwd_tunnel_rx, NULL, NULL);
-  if (!nr_pdcp_start_dl_forwarding(ue_id, drb_id, xnu_forward_sdu, NULL)) {
+  if (!nr_pdcp_start_dl_forwarding(ue_id, drb_id, xnu_forward_sdu, xnu_forward_timeout, NULL)) {
     LOG_E(E1AP, "UE %u DRB %d: cannot start DL forwarding\n", ue_id, drb_id);
     e1_remove_xnu_tunnel(ue_id, drb_id);
     return;
@@ -738,6 +739,22 @@ static void n3_end_marker(ue_id_t ue_id, int pdusession_id)
     gtpv1uSendEndMarker(xnuinst, ue_id, drb_ids[i]);
     e1_remove_xnu_tunnel(ue_id, drb_ids[i]);
   }
+  if (take_release_pending(ue_id)) {
+    LOG_I(E1AP, "UE %lx: DL forwarding ended, releasing deferred UE\n", ue_id);
+    remove_ue_e1(ue_id);
+  }
+}
+
+/** @brief Xn HO source: forwarding guard of a DRB expired without UPF End Marker. End its
+ *  forwarding as on the End Marker, so that the target stops holding NG-U data, and
+ *  release a UE whose release was deferred for forwarding. */
+static void xnu_forward_timeout(void *data, ue_id_t ue_id, int drb_id)
+{
+  if (!nr_pdcp_end_dl_forwarding_drb(ue_id, drb_id))
+    return;
+  LOG_W(GTPU, "UE %lx DRB %d: forwarding guard expired, End Marker on the Xn-U forwarding tunnel\n", ue_id, drb_id);
+  gtpv1uSendEndMarker(get_xnu_gtp_instance(), ue_id, drb_id);
+  e1_remove_xnu_tunnel(ue_id, drb_id);
   if (take_release_pending(ue_id)) {
     LOG_I(E1AP, "UE %lx: DL forwarding ended, releasing deferred UE\n", ue_id);
     remove_ue_e1(ue_id);

@@ -279,6 +279,38 @@ void nr_pdcp_entity_forwarding_end_received(nr_pdcp_entity_t *entity, ue_id_t ue
     release_ngu(entity, ue_id);
 }
 
+void nr_pdcp_entity_check_forwarding_guards(nr_pdcp_entity_t *entity, uint64_t now)
+{
+  if (entity->forward_sdu && !entity->forward_ended && !entity->forward_timed_out
+      && now - entity->forward_start >= NR_PDCP_FWD_SOURCE_GUARD_MS) {
+    LOG_W(PDCP,
+          "DRB %d: no End Marker %d ms after the DL freeze, ending forwarding\n",
+          entity->rb_id,
+          NR_PDCP_FWD_SOURCE_GUARD_MS);
+    entity->forward_timed_out = true;
+  }
+  if ((entity->fwd_hold || entity->ngu_hold) && now - entity->hold_start >= NR_PDCP_FWD_TARGET_GUARD_MS) {
+    if (entity->fwd_hold) {
+      LOG_W(PDCP,
+            "UE %lx DRB %d: no SN status %d ms after setup, dropping %d held forwarded SDUs\n",
+            entity->hold_ue_id,
+            entity->rb_id,
+            NR_PDCP_FWD_TARGET_GUARD_MS,
+            entity->fwd_held.count);
+      fwd_queue_free(&entity->fwd_held);
+      entity->fwd_hold = false;
+    }
+    if (entity->ngu_hold) {
+      LOG_W(PDCP,
+            "UE %lx DRB %d: no forwarding End Marker %d ms after setup\n",
+            entity->hold_ue_id,
+            entity->rb_id,
+            NR_PDCP_FWD_TARGET_GUARD_MS);
+      nr_pdcp_entity_forwarding_end_received(entity, entity->hold_ue_id);
+    }
+  }
+}
+
 void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring)
 {
   nr_pdcp_shadow_sdu_t *cur = ring->head;
@@ -744,6 +776,7 @@ static void nr_pdcp_entity_set_time(nr_pdcp_entity_t *entity, uint64_t now)
     nr_pdcp_shadow_ring_sweep_expired(entity->shadow_ring, now, entity->discard_timer);
 
   check_t_reordering(entity);
+  nr_pdcp_entity_check_forwarding_guards(entity, now);
 }
 
 static void deliver_all_sdus(nr_pdcp_entity_t *entity)

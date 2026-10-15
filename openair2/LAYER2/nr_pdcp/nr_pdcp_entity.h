@@ -53,6 +53,14 @@ typedef struct {
 /* Xn HO target: held forwarded SDUs, a full source backlog (with SN) plus the fresh SDUs
  * (without SN) forwarded until the SN status is applied */
 #define NR_PDCP_FWD_HOLD_CAP_COUNT (4 * NR_PDCP_SHADOW_RING_CAP_COUNT)
+/* Xn HO guard timers (ms). A handover completes within TXnRELOCoverall, and the End Marker
+ * follows the path switch within milliseconds.
+ * Source: from the DL freeze, until the UPF End Marker; then forwarding is ended anyway.
+ * Target: from the DRB setup, until the SN status (else the held forwarded SDUs, which
+ * cannot be numbered, are dropped) and until the forwarding End Marker (else NG-U data is
+ * released anyway). */
+#define NR_PDCP_FWD_SOURCE_GUARD_MS 2000
+#define NR_PDCP_FWD_TARGET_GUARD_MS 2000
 
 typedef struct nr_pdcp_shadow_sdu_s {
   uint32_t count; /* original PDCP COUNT this plaintext SDU was assigned */
@@ -62,6 +70,9 @@ typedef struct nr_pdcp_shadow_sdu_s {
   struct nr_pdcp_shadow_sdu_s *next;
   char data[]; /* plaintext SDU bytes */
 } nr_pdcp_shadow_sdu_t;
+
+/* Xn HO source: forwarding guard expired without End Marker (called without PDCP lock) */
+typedef void (*nr_pdcp_forward_timeout_t)(void *data, ue_id_t ue_id, int rb_id);
 
 /* Xn HO source: hands a DL PDCP SDU to the target; sn < 0 if the SDU has no SN */
 typedef void (*nr_pdcp_forward_sdu_t)(void *data, ue_id_t ue_id, int rb_id, const char *buf, int size, int sn, int sn_size);
@@ -243,6 +254,11 @@ typedef struct nr_pdcp_entity_s {
   void *forward_sdu_data;
   /* Xn HO source: End Marker sent, nothing more is forwarded */
   bool forward_ended;
+  /* Xn HO source: forwarding guard, started at the freeze; forward_timed_out is set when
+   * it expires, for the timer thread to call forward_timeout outside the PDCP lock */
+  uint64_t forward_start;
+  bool forward_timed_out;
+  nr_pdcp_forward_timeout_t forward_timeout;
 
   /* Xn HO target: forwarded DL SDUs are held, in arrival order, while fwd_hold */
   bool fwd_hold;
@@ -252,6 +268,9 @@ typedef struct nr_pdcp_entity_s {
   bool ngu_hold;
   bool fwd_end;
   nr_pdcp_fwd_queue_t ngu_held;
+  /* Xn HO target: guard of fwd_hold/ngu_hold, started at the DRB setup */
+  uint64_t hold_start;
+  ue_id_t hold_ue_id;
 
 } nr_pdcp_entity_t;
 
@@ -274,6 +293,8 @@ bool nr_pdcp_entity_hold_ngu_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, char *
 /* Xn HO target: forwarding End Marker received; once the forwarded SDUs are sent, the
  * NG-U SDUs held so far are sent and NG-U is no longer held */
 void nr_pdcp_entity_forwarding_end_received(nr_pdcp_entity_t *entity, ue_id_t ue_id);
+/* Xn HO guard timers, called from set_time() */
+void nr_pdcp_entity_check_forwarding_guards(nr_pdcp_entity_t *entity, uint64_t now);
 
 /* Sibling to entity->process_sdu() that writes/ciphers using an explicit COUNT
  * instead of entity->tx_next, and does not advance tx_next. Used at the target

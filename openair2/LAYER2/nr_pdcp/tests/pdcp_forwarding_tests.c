@@ -249,6 +249,66 @@ static void test_target_end_before_sn_status(void)
   e->delete_entity(e);
 }
 
+/* source: the forwarding guard expires only without End Marker */
+static void test_source_guard(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  e->forward_start = 1000;
+  e->set_time(e, 1000 + NR_PDCP_FWD_SOURCE_GUARD_MS - 1);
+  CHECK(!e->forward_timed_out);
+  e->set_time(e, 1000 + NR_PDCP_FWD_SOURCE_GUARD_MS);
+  CHECK(e->forward_timed_out);
+  e->delete_entity(e);
+
+  e = new_drb(18);
+  nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  e->forward_start = 1000;
+  e->forward_ended = true;
+  e->set_time(e, 1000 + 10 * NR_PDCP_FWD_SOURCE_GUARD_MS);
+  CHECK(!e->forward_timed_out);
+  e->delete_entity(e);
+}
+
+/* target: no SN status: the held forwarded SDUs are dropped and the NG-U SDUs go */
+static void test_target_guard_no_sn_status(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  e->fwd_hold = e->ngu_hold = true;
+  e->hold_start = 5000;
+  char f = 'f', n = 'n';
+  tx_n = 0;
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &f, 1, 7);
+  CHECK(nr_pdcp_entity_hold_ngu_sdu(e, 1, &n, 1));
+  e->set_time(e, 5000 + NR_PDCP_FWD_TARGET_GUARD_MS - 1);
+  CHECK(tx_n == 0 && e->fwd_hold && e->ngu_hold);
+  e->set_time(e, 5000 + NR_PDCP_FWD_TARGET_GUARD_MS);
+  CHECK(!e->fwd_hold && !e->ngu_hold && e->fwd_held.count == 0);
+  CHECK(tx_n == 1 && tx_payload[0] == 'n');
+  e->delete_entity(e);
+}
+
+/* target: SN status but no End Marker: NG-U SDUs go at expiry, after the forwarded ones */
+static void test_target_guard_no_end_marker(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  e->fwd_hold = e->ngu_hold = true;
+  e->hold_start = 5000;
+  char f = 'f', n = 'n';
+  tx_n = 0;
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &f, 1, -1);
+  CHECK(nr_pdcp_entity_hold_ngu_sdu(e, 1, &n, 1));
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 0, .sn = 3}, 18);
+  nr_pdcp_entity_release_forwarded(e, 1);
+  CHECK(tx_n == 1 && tx_payload[0] == 'f');
+  e->set_time(e, 5000 + NR_PDCP_FWD_TARGET_GUARD_MS);
+  CHECK(tx_n == 2 && tx_payload[1] == 'n' && tx_count[1] == 4 && !e->ngu_hold);
+  /* no further action once the holds are over */
+  e->set_time(e, 5000 + 2 * NR_PDCP_FWD_TARGET_GUARD_MS);
+  CHECK(tx_n == 2);
+  e->delete_entity(e);
+}
+
 int main(void)
 {
   logInit();
@@ -260,6 +320,9 @@ int main(void)
   test_target_hold_full_backlog();
   test_target_ngu_hold();
   test_target_end_before_sn_status();
+  test_source_guard();
+  test_target_guard_no_sn_status();
+  test_target_guard_no_end_marker();
   printf("pdcp_forwarding_tests: OK\n");
   return 0;
 }

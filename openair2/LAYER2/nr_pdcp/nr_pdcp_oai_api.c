@@ -717,6 +717,15 @@ bool nr_pdcp_ue_forwarding(ue_id_t ue_id)
  *  of the session's forwarding DRBs (each only once) and completes a deferred UE removal.
  *  @param drb_ids out: the DRBs that ended now, to send the End Marker on
  *  @return number of entries in drb_ids */
+/* completes a removal deferred for forwarding once no DRB forwards; call with the lock */
+static void remove_if_pending(nr_pdcp_ue_t *ue)
+{
+  if (ue->remove_pending && !ue_forwarding(ue)) {
+    LOG_I(PDCP, "UE %lx: DL forwarding ended, removing deferred UE\n", ue->ue_id);
+    nr_pdcp_manager_remove_ue(nr_pdcp_ue_manager, ue->ue_id);
+  }
+}
+
 int nr_pdcp_end_dl_forwarding(ue_id_t ue_id, int pdusession_id, int drb_ids[MAX_DRBS_PER_UE])
 {
   int n = 0;
@@ -730,13 +739,28 @@ int nr_pdcp_end_dl_forwarding(ue_id_t ue_id, int pdusession_id, int drb_ids[MAX_
         drb_ids[n++] = rb->rb_id;
       }
     }
-    if (ue->remove_pending && !ue_forwarding(ue)) {
-      LOG_I(PDCP, "UE %lx: DL forwarding ended, removing deferred UE\n", ue_id);
-      nr_pdcp_manager_remove_ue(nr_pdcp_ue_manager, ue_id);
-    }
+    remove_if_pending(ue);
   }
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
   return n;
+}
+
+/** @brief Xn HO source: end DL forwarding of one DRB without UPF End Marker (guard timer)
+ *  @return true if the DRB was forwarding: the End Marker is to be sent on its tunnel */
+bool nr_pdcp_end_dl_forwarding_drb(ue_id_t ue_id, rb_id_t rb_id)
+{
+  bool ended = false;
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
+  if (rb && rb->forward_sdu && !rb->forward_ended) {
+    rb->forward_ended = true;
+    ended = true;
+  }
+  if (ue)
+    remove_if_pending(ue);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+  return ended;
 }
 
 void nr_pdcp_config_set_security(ue_id_t ue_id,
@@ -1159,14 +1183,21 @@ void nr_pdcp_get_drb_count_values(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_count_t 
  *  nr_pdcp_entity_start_dl_forwarding()). Read the SN status after this call: DL COUNT
  *  is then the first COUNT the target assigns.
  *  @return false if the DRB does not exist or already forwards */
-bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_forward_sdu_t forward_sdu, void *data)
+bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id,
+                                 rb_id_t rb_id,
+                                 nr_pdcp_forward_sdu_t forward_sdu,
+                                 nr_pdcp_forward_timeout_t forward_timeout,
+                                 void *data)
 {
   nr_pdcp_manager_lock(nr_pdcp_ue_manager);
   nr_pdcp_ue_t *ue = find_ue(ue_id);
   nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
   bool ok = rb != NULL && rb->forward_sdu == NULL;
-  if (ok)
+  if (ok) {
     nr_pdcp_entity_start_dl_forwarding(rb, ue_id, forward_sdu, data);
+    rb->forward_start = nr_pdcp_current_time();
+    rb->forward_timeout = forward_timeout;
+  }
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
   return ok;
 }
@@ -1181,6 +1212,8 @@ void nr_pdcp_hold_forwarded(ue_id_t ue_id, rb_id_t rb_id)
   if (rb) {
     rb->fwd_hold = true;
     rb->ngu_hold = true;
+    rb->hold_start = nr_pdcp_current_time();
+    rb->hold_ue_id = ue_id;
   } else {
     LOG_E(PDCP, "UE %lx: cannot hold forwarded data, DRB %ld not found\n", ue_id, rb_id);
   }
