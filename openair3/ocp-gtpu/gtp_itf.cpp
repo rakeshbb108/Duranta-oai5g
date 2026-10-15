@@ -121,6 +121,9 @@ typedef struct gtpv1u_bearer_s {
   uint16_t seqNum;
   uint8_t npduNum;
   int32_t nru_sequence_number;
+  /** F1-U at the CU: PDCP SN size of the DRB; DL USER DATA then requests a delivery report
+   *  (Report Delivered) for each PDU. 0: no report requested */
+  int pdcp_sn_size;
 } gtpv1u_bearer_t;
 
 typedef struct {
@@ -143,6 +146,8 @@ typedef struct {
   gtpCallbackFwd callBackFwd;
   /** End Marker received on this tunnel */
   gtpCallbackEndMarker endMarkerCallBack;
+  /** F1-U at the CU: DL DATA DELIVERY STATUS received on this tunnel */
+  gtpCallbackDlDeliveryStatus ddsCallBack;
 } ueidData_t;
 
 typedef struct {
@@ -321,6 +326,11 @@ static int gtpv1uCreateAndSendMsg(gtpv1u_bearer_t *bearer,
 /** Internal function to send GTP-U packet with optional QFI marking
  * Per TS 29.281 §5.2, QFI is carried in PDU Session Container extension header for N3-U
  * @param qfi QoS Flow Identifier (0..63) for N3-U, or NO_QFI (-1) for F1-U */
+static void fillDlDeliveryStatusReport(gtpu_extension_header_t *ext,
+                                       uint32_t desired_buffer_size,
+                                       int highest_tx_sn,
+                                       int highest_delivered_sn);
+
 static void _gtpv1uSendDirect(instance_t instance,
                               ue_id_t ue_id,
                               int bearer_id,
@@ -329,7 +339,8 @@ static void _gtpv1uSendDirect(instance_t instance,
                               size_t len,
                               bool seqNumFlag,
                               bool npduNumFlag,
-                              int32_t nru_seqnum)
+                              int32_t nru_seqnum,
+                              int32_t report_sn)
 {
   pthread_mutex_lock(&globGtp.gtp_lock);
   getInstRetVoid(compatInst(instance));
@@ -395,6 +406,8 @@ static void _gtpv1uSendDirect(instance_t instance,
       .type = GTPU_EXT_DL_USER_DATA,
       .dl_user_data = {
         .nru_sequence_number = (uint32_t)nru_seqnum,
+        .report_delivered = report_sn >= 0,
+        .nr_pdcp_pdu_sn = report_sn >= 0 ? (uint32_t)report_sn : 0,
       }
     };
     LOG_D(GTPU, "DL USER DATA TX: ue %ld bearer %d nru_sn %u\n", ue_id, bearer_id, (uint32_t)nru_seqnum);
@@ -422,7 +435,7 @@ void gtpv1uSendDirectWithQFI(instance_t instance, ue_id_t ue_id, int bearer_id, 
               "Invalid QFI %d for gtpv1uSendDirectWithQFI (expected 0..%d)\n",
               qfi,
               MAX_QOS_FLOWS - 1);
-  _gtpv1uSendDirect(instance, ue_id, bearer_id, qfi, buf, len, false, false, -1);
+  _gtpv1uSendDirect(instance, ue_id, bearer_id, qfi, buf, len, false, false, -1, -1);
 }
 
 /** Send GTP-U packet with no QFI marking for F1-U tunnel
@@ -435,14 +448,17 @@ void gtpv1uSendDirect(instance_t instance,
                       bool seqNumFlag,
                       bool npduNumFlag)
 {
-  _gtpv1uSendDirect(instance, ue_id, bearer_id, NO_QFI, buf, len, seqNumFlag, npduNumFlag, -1);
+  _gtpv1uSendDirect(instance, ue_id, bearer_id, NO_QFI, buf, len, seqNumFlag, npduNumFlag, -1, -1);
 }
 
+/** @brief F1-U DL at the CU: G-PDU with DL USER DATA (TS 38.425). If the bearer has a PDCP SN
+ *  size (GtpuSetPdcpSnSize()), Report Delivered is set for the PDCP SN of pdcp_count. */
 void gtpv1uSendDirectWithNRUSeqNum(instance_t instance,
                                    ue_id_t ue_id,
                                    int bearer_id,
                                    uint8_t *buf,
-                                   size_t len)
+                                   size_t len,
+                                   uint32_t pdcp_count)
 {
   pthread_mutex_lock(&globGtp.gtp_lock);
   getInstRetVoid(compatInst(instance));
@@ -458,10 +474,47 @@ void gtpv1uSendDirectWithNRUSeqNum(instance_t instance,
   int32_t nru_seqnum = ptr2->second.nru_sequence_number;
   ptr2->second.nru_sequence_number++;
   ptr2->second.nru_sequence_number &= (1 << 24) - 1;
+  const int sn_size = ptr2->second.pdcp_sn_size;
 
   pthread_mutex_unlock(&globGtp.gtp_lock);
 
-  _gtpv1uSendDirect(instance, ue_id, bearer_id, NO_QFI, buf, len, false, false, nru_seqnum);
+  const int32_t report_sn = sn_size > 0 ? (int32_t)(pdcp_count & ((1u << sn_size) - 1)) : -1;
+  _gtpv1uSendDirect(instance, ue_id, bearer_id, NO_QFI, buf, len, false, false, nru_seqnum, report_sn);
+}
+
+void GtpuSetPdcpSnSize(instance_t instance, ue_id_t ue_id, int bearer_id, int sn_size)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  getInstRetVoid(compatInst(instance));
+  getUeRetVoid(inst, ue_id);
+  auto ptr2 = ptrUe->second.bearers.find(bearer_id);
+  if (ptr2 != ptrUe->second.bearers.end())
+    ptr2->second.pdcp_sn_size = sn_size;
+  pthread_mutex_unlock(&globGtp.gtp_lock);
+}
+
+/** @brief F1-U UL at the DU: DL DATA DELIVERY STATUS (TS 38.425) with the highest NR PDCP SN
+ *  successfully delivered in sequence to the UE */
+void gtpv1uSendDlDeliveryStatus(instance_t instance,
+                                ue_id_t ue_id,
+                                int bearer_id,
+                                uint32_t desired_buffer_size,
+                                uint32_t highest_delivered_sn)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  getInstRetVoid(compatInst(instance));
+  getUeRetVoid(inst, ue_id);
+  auto ptr2 = ptrUe->second.bearers.find(bearer_id);
+  if (ptr2 == ptrUe->second.bearers.end()) {
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return;
+  }
+  gtpv1u_bearer_t bearer = ptr2->second;
+  pthread_mutex_unlock(&globGtp.gtp_lock);
+
+  gtpu_extension_header_t ext;
+  fillDlDeliveryStatusReport(&ext, desired_buffer_size, -1, (int)highest_delivered_sn);
+  gtpv1uCreateAndSendMsg(&bearer, GTP_GPDU, NULL, 0, false, false, &ext, 1);
 }
 
 /** @brief Send a G-PDU carrying a forwarded PDCP SDU (Xn HO DL data forwarding).
@@ -919,6 +972,17 @@ int gtpv1u_create_ngu_tunnel(const instance_t instance,
   create_tunnel_resp->gnb_addr.length = sizeof(addr);
   create_tunnel_resp->pdusession_id = create_tunnel_req->pdusession_id;
   return !GTPNOK;
+}
+
+void GtpuSetDlDeliveryStatusCallback(teid_t incoming_teid, gtpCallbackDlDeliveryStatus ddsCallBack)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  auto tunnel = globGtp.te2ue_mapping.find(incoming_teid);
+  if (tunnel != globGtp.te2ue_mapping.end())
+    tunnel->second.ddsCallBack = ddsCallBack;
+  else
+    LOG_E(GTPU, "set DL DATA DELIVERY STATUS callback: unknown TEID 0x%x\n", incoming_teid);
+  pthread_mutex_unlock(&globGtp.gtp_lock);
 }
 
 void GtpuSetEndMarkerCallback(teid_t incoming_teid, gtpCallbackEndMarker endMarkerCallBack)
@@ -1442,7 +1506,9 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
 
   int8_t qfi = -1;
   bool rqi = false;
-  uint32_t NR_PDCP_PDU_SN = 0;
+  /* DL USER DATA with Report Delivered: the NR PDCP PDU SN to report delivery of
+   * (TS 38.425), passed up as SN + 1 in the MUI (0: none, RLC_MUI_UNDEFINED) */
+  mui_t mui = RLC_MUI_UNDEFINED;
   /* PDCP SN of a DL SDU forwarded during Xn/N3 HO data forwarding, if present
    * (TS 29.281 5.2.2.2 / 5.2.2.2A); -1 when this is not forwarded backlog */
   int32_t fwd_pdcp_sn = -1;
@@ -1499,11 +1565,8 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
                   uedata.incoming_rb_id,
                   dl_user_data.nru_sequence_number,
                   dl_user_data.report_delivered ? dl_user_data.nr_pdcp_pdu_sn : 0u);
-            if (dl_user_data.report_delivered) {
-              /* TS 38.425 clause 5.4: store the NR PDCP PDU SN for which a delivery status report
-               * shall be generated when the PDU reaches the lower layers */
-              NR_PDCP_PDU_SN = dl_user_data.nr_pdcp_pdu_sn;
-            }
+            if (dl_user_data.report_delivered)
+              mui = dl_user_data.nr_pdcp_pdu_sn + 1;
           } else if (PDU_type == NRUP_PDU_DL_DATA_DELIVERY_STATUS) {
             /* TS 38.425 Figure 5.5.2.2-1: NR-UP payload in NR RAN Container (29.281) */
             const int container_len = GTPU_EXT_HDR_CONTENT_LEN(extension_header_length);
@@ -1518,6 +1581,8 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
               LOG_W(GTPU, "DL DATA DELIVERY STATUS: malformed NR-RAN container\n");
               break;
             }
+            if (uedata.ddsCallBack && ddds.highest_delivered_nr_pdcp_sn_present)
+              uedata.ddsCallBack(uedata.ue_id, uedata.incoming_rb_id, ddds.highest_delivered_nr_pdcp_sn);
             LOG_D(GTPU,
                   "DL DATA DELIVERY STATUS RX: ue %lx drb %u desired_buffer_size %u highest_tx_sn %u\n",
                   uedata.ue_id,
@@ -1563,7 +1628,6 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
   protocol_ctxt_t ctxt = { .enb_flag = 1, .rntiMaybeUEid = uedata.ue_id, };
   const srb_flag_t srb_flag = SRB_FLAG_NO;
   uint16_t rb_id = uedata.incoming_rb_id;
-  const mui_t mui = RLC_MUI_UNDEFINED;
   const confirm_t confirm = RLC_SDU_CONFIRM_NO;
   const sdu_size_t sdu_buffer_size = msgBufLen - offset;
   unsigned char *const sdu_buffer = msgBuf + offset;
@@ -1607,32 +1671,6 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
       if (!uedata.callBack(&ctxt, srb_flag, rb_id, mui, confirm, sdu_buffer_size, sdu_buffer, mode, &sourceL2Id, &destinationL2Id))
         LOG_E(GTPU, "[%d] down layer refused incoming packet\n", h);
     }
-  }
-
-  /* DU TX: DL DATA DELIVERY STATUS when CU set Report Delivered on DL USER DATA (TS 38.425 clause 5.4).
-   * Note: uses DRB-based RLC state, keep it on non-SDAP path only. SN%5 is a temporary rate limit until
-   * F1 congestion control policy is implemented.*/
-  if (!uedata.callBackSDAP && NR_PDCP_PDU_SN > 0 && NR_PDCP_PDU_SN % 5 == 0) {
-    int rlc_tx_buffer_space = nr_rlc_get_available_tx_space(ctxt.rntiMaybeUEid, rb_id + 3);
-    uint32_t teid = globGtp.te2ue_mapping[ntohl(msgHdr->teid)].outgoing_teid;
-    LOG_D(GTPU,
-          "DL DATA DELIVERY STATUS TX: ue %lx drb %u nr_pdcp_pdu_sn %u desired_buffer_size %u teid 0x%x\n",
-          uedata.ue_id,
-          rb_id,
-          NR_PDCP_PDU_SN,
-          rlc_tx_buffer_space,
-          teid);
-    gtpu_extension_header_t ext;
-    fillDlDeliveryStatusReport(&ext, rlc_tx_buffer_space, (int)NR_PDCP_PDU_SN, -1);
-    gtpv1u_bearer_t bearer = create_bearer(h, addr, teid, 0);
-    gtpv1uCreateAndSendMsg(&bearer,
-                           GTP_GPDU,
-                           NULL,
-                           0,
-                           false,
-                           false,
-                           &ext,
-                           1);
   }
 
   LOG_D(GTPU, "[%d] Received a %d bytes packet for: TEID:0x%x\n", h, msgBufLen - offset, ntohl(msgHdr->teid));

@@ -156,6 +156,19 @@ bool nr_pdcp_entity_forwarded_count(const nr_pdcp_entity_t *entity, int sn, uint
   return true;
 }
 
+void nr_pdcp_entity_delivered_up_to_sn(nr_pdcp_entity_t *entity, int sn)
+{
+  if (entity->shadow_ring == NULL || sn < 0 || sn > entity->sn_max)
+    return;
+  uint32_t d = ((entity->tx_next & entity->sn_max) - (uint32_t)sn) & entity->sn_max;
+  if (d == 0 || d > (uint32_t)entity->window_size || d > entity->tx_next)
+    return;
+  uint32_t count = entity->tx_next - d;
+  nr_pdcp_shadow_ring_t *ring = entity->shadow_ring;
+  while (ring->head != NULL && ring->head->count <= count)
+    shadow_ring_pop_head(ring);
+}
+
 static void send_forwarded_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, char *buf, int size, int sn)
 {
   int max_size = nr_max_pdcp_pdu_size(size);

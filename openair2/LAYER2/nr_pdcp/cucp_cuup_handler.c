@@ -10,6 +10,7 @@
 #include <string.h>
 #include "NR_DRB-ToAddMod.h"
 #include "NR_DRB-ToAddModList.h"
+#include "E1AP_RLC-Mode.h"
 #include "NR_PDCP-Config.h"
 #include "NR_QFI.h"
 #include "NR_SDAP-Config.h"
@@ -117,9 +118,18 @@ static void n3_error_indication(const gtpv1u_error_indication_ind_t *ind)
   free_e1ap_context_mod_required(&req);
 }
 
-/** @brief Fill and send request to create GTP-U tunnel (F1-U) */
+/* F1-U DL DATA DELIVERY STATUS from the DU (TS 38.425) */
+static void f1u_dl_delivery_status(ue_id_t ue_id, int drb_id, uint32_t highest_delivered_sn)
+{
+  nr_pdcp_delivered_up_to_sn(ue_id, drb_id, highest_delivered_sn);
+}
+
+/** @brief Fill and send request to create GTP-U tunnel (F1-U). For an RLC AM DRB, DL USER DATA
+ *  requests delivery reports (Report Delivered) whose DL DATA DELIVERY STATUS prunes the
+ *  DL backlog kept for Xn HO forwarding. */
 static UP_TL_information_t f1_drb_gtpu_create(const instance_t f1inst,
-                                              const gtpv1u_gnb_create_tunnel_req_t *req)
+                                              const gtpv1u_gnb_create_tunnel_req_t *req,
+                                              const bearer_context_pdcp_config_t *pdcp)
 {
   UP_TL_information_t out = {0};
 
@@ -128,6 +138,11 @@ static UP_TL_information_t f1_drb_gtpu_create(const instance_t f1inst,
   gtpv1u_gnb_create_tunnel_resp_t resp = {0};
   int ret = gtpv1u_create_ngu_tunnel(f1inst, req, &resp, cu_f1u_data_req, NULL, NULL);
   AssertFatal(ret >= 0, "Unable to create GTP-U tunnel for F1-U\n");
+  if (pdcp->rLC_Mode == E1AP_RLC_Mode_rlc_am) {
+    int sn_size = pdcp->pDCP_SN_Size_DL == NR_PDCP_Config__drb__pdcp_SN_SizeDL_len18bits ? 18 : 12;
+    GtpuSetPdcpSnSize(f1inst, req->ue_id, req->pdusession_id, sn_size);
+    GtpuSetDlDeliveryStatusCallback(resp.gnb_NGu_teid, f1u_dl_delivery_status);
+  }
   AssertFatal(resp.gnb_addr.length == sizeof(in_addr_t),
               "GTP tunnel response address length %d does not match IPv4 size %zu\n",
               resp.gnb_addr.length,
@@ -330,7 +345,7 @@ void e1_bearer_context_setup(const e1ap_bearer_setup_req_t *req)
                                                         .dst_addr.length = 32};
         memcpy(&f1_tunnel_req.dst_addr.buffer, &dummy_address, sizeof(uint8_t) * 4);
         up_params_t *up = &resp_drb->UpParamList[resp_drb->numUpParam++];
-        up->tl_info = f1_drb_gtpu_create(f1inst, &f1_tunnel_req);
+        up->tl_info = f1_drb_gtpu_create(f1inst, &f1_tunnel_req, &req_drb->pdcp_config);
         LOG_D(E1AP,
               "Created F1-U tunnel for DRB %ld (TEID %d tlAddress %x)\n",
               req_drb->id,
@@ -535,7 +550,7 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
                                                         .dst_addr.length = 32};
         memcpy(&f1_tunnel_req.dst_addr.buffer, &dummy_address, sizeof(uint8_t) * 4);
         up_params_t *up = &resp_drb->UpParamList[resp_drb->numUpParam++];
-        up->tl_info = f1_drb_gtpu_create(f1inst, &f1_tunnel_req);
+        up->tl_info = f1_drb_gtpu_create(f1inst, &f1_tunnel_req, &req_drb->pdcp_config);
         LOG_D(E1AP,
               "Created F1-U tunnel for DRB %ld (TEID %d tlAddress %x)\n",
               req_drb->id,

@@ -454,7 +454,8 @@ static void deliver_pdu_drb_gnb(void *deliver_pdu_data, ue_id_t ue_id, int rb_id
     LOG_D(PDCP, "%s() (drb %d) sending message to gtp size %d\n", __func__, rb_id, size);
     const f1ap_cudu_inst_t *inst = getCxt(0);
     DevAssert(inst);
-    gtpv1uSendDirectWithNRUSeqNum(inst->gtpInst, ue_id, rb_id, (uint8_t *)buf, size);
+    /* sdu_id is the PDCP COUNT of the PDU (nr_pdcp_data_req_drb(), forwarded SDUs) */
+    gtpv1uSendDirectWithNRUSeqNum(inst->gtpInst, ue_id, rb_id, (uint8_t *)buf, size, (uint32_t)sdu_id);
   } else {
     uint8_t *memblock = malloc16(size);
     memcpy(memblock, buf, size);
@@ -1228,6 +1229,17 @@ void nr_pdcp_release_forwarded(ue_id_t ue_id, rb_id_t rb_id)
   nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
   if (rb)
     nr_pdcp_entity_release_forwarded(rb, ue_id);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief F1 split, CU-UP: DL DATA DELIVERY STATUS of a DRB from the DU */
+void nr_pdcp_delivered_up_to_sn(ue_id_t ue_id, rb_id_t rb_id, uint32_t sn)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
+  if (rb)
+    nr_pdcp_entity_delivered_up_to_sn(rb, (int)sn);
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
 }
 

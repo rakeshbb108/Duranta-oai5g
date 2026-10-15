@@ -293,6 +293,9 @@ bool nr_pdcp_entity_hold_ngu_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, char *
 /* Xn HO target: forwarding End Marker received; once the forwarded SDUs are sent, the
  * NG-U SDUs held so far are sent and NG-U is no longer held */
 void nr_pdcp_entity_forwarding_end_received(nr_pdcp_entity_t *entity, ue_id_t ue_id);
+/* F1 split: the DU delivered all DL SDUs up to PDCP SN sn in sequence; they leave the
+ * shadow ring. The SN is taken within the window below TX_NEXT, else ignored. */
+void nr_pdcp_entity_delivered_up_to_sn(nr_pdcp_entity_t *entity, int sn);
 /* Xn HO guard timers, called from set_time() */
 void nr_pdcp_entity_check_forwarding_guards(nr_pdcp_entity_t *entity, uint64_t now);
 

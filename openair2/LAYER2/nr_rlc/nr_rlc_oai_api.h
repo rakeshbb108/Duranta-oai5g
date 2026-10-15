@@ -75,6 +75,10 @@ void nr_rlc_release_entity(int ue_id, logical_chan_id_t channel_id);
 
 void nr_rlc_reconfigure_entity(int ue_id, int lc_id, NR_RLC_Config_t *rlc_Config);
 
+/* DL RLC SDU of a DRB confirmed delivered (RLC AM); sdu_id as given with the SDU,
+ * tx_space the free TX buffer of the entity. Called with the RLC lock held. */
+typedef void (*nr_rlc_dl_delivered_cb_t)(int ue_id, int rb_id, int sdu_id, int tx_space);
+void nr_rlc_set_dl_delivered_cb(nr_rlc_dl_delivered_cb_t cb);
 int nr_rlc_get_available_tx_space(const int ue_id, const logical_chan_id_t channel_idP);
 
 int nr_rlc_tx_list_occupancy(int ue_id, logical_chan_id_t lcid);

@@ -507,6 +507,13 @@ rb_found:
   }
 }
 
+static nr_rlc_dl_delivered_cb_t dl_delivered_cb;
+
+void nr_rlc_set_dl_delivered_cb(nr_rlc_dl_delivered_cb_t cb)
+{
+  dl_delivered_cb = cb;
+}
+
 static void successful_delivery(void *_ue, nr_rlc_entity_t *entity, int sdu_id)
 {
   nr_rlc_ue_t *ue = _ue;
@@ -550,6 +557,10 @@ rb_found:
   int is_gnb = nr_rlc_manager_get_gnb_flag(nr_rlc_ue_manager);
   if (!is_gnb)
     return;
+
+  /* DU (F1 split): DL delivery report toward the CU-UP; called with the RLC lock held */
+  if (dl_delivered_cb)
+    dl_delivered_cb(ue->ue_id, rb_id, sdu_id, entity->available_tx_space(entity));
 
   /* prune the PDCP shadow buffer used for Xn HO DL data forwarding; PDCP uses the
    * CU UE ID, as in deliver_sdu() */

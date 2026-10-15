@@ -314,6 +314,26 @@ static void test_target_guard_no_end_marker(void)
   e->delete_entity(e);
 }
 
+/* F1 split: the DU reports the highest SN delivered in sequence; the SDUs up to its COUNT
+ * (below TX_NEXT, across an HFN boundary here) leave the shadow ring */
+static void test_delivered_up_to_sn(void)
+{
+  nr_pdcp_entity_t *e = new_drb(12);
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 1, .sn = 4094}, 12);
+  for (char i = 0; i < 6; i++)
+    send_sdu(e, i); /* COUNT 2*4096-2 .. 2*4096+3 */
+  CHECK(e->shadow_ring->count == 6);
+  /* SN of TX_NEXT and SNs more than a window below are not delivered SDUs */
+  nr_pdcp_entity_delivered_up_to_sn(e, 4);
+  nr_pdcp_entity_delivered_up_to_sn(e, 2000);
+  CHECK(e->shadow_ring->count == 6);
+  nr_pdcp_entity_delivered_up_to_sn(e, 1);
+  CHECK(e->shadow_ring->count == 2 && e->shadow_ring->head->count == 2 * 4096 + 2);
+  nr_pdcp_entity_delivered_up_to_sn(e, 3);
+  CHECK(e->shadow_ring->count == 0);
+  e->delete_entity(e);
+}
+
 int main(void)
 {
   logInit();
@@ -328,6 +348,7 @@ int main(void)
   test_source_guard();
   test_target_guard_no_sn_status();
   test_target_guard_no_end_marker();
+  test_delivered_up_to_sn();
   printf("pdcp_forwarding_tests: OK\n");
   return 0;
 }

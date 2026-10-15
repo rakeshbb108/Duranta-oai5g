@@ -72,6 +72,9 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
   /** @brief End Marker received on a tunnel; rb_id is the tunnel's incoming bearer ID */
   typedef void (*gtpCallbackEndMarker)(ue_id_t ue_id, int rb_id);
 
+  /** @brief F1-U at the CU: DL DATA DELIVERY STATUS with Highest Delivered NR PDCP SN received */
+  typedef void (*gtpCallbackDlDeliveryStatus)(ue_id_t ue_id, int rb_id, uint32_t highest_delivered_sn);
+
   /** @brief GTP callback payload (TS 23.527 clause 5.3.3.1) */
   typedef struct gtpv1u_error_indication_ind_s {
     instance_t gtp_instance;
@@ -148,6 +151,13 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
 
   void GtpuSetForwardedDataCallback(teid_t incoming_teid, gtpCallbackFwd callBackFwd);
   void GtpuSetEndMarkerCallback(teid_t incoming_teid, gtpCallbackEndMarker endMarkerCallBack);
+  void GtpuSetDlDeliveryStatusCallback(teid_t incoming_teid, gtpCallbackDlDeliveryStatus ddsCallBack);
+  void GtpuSetPdcpSnSize(instance_t instance, ue_id_t ue_id, int bearer_id, int sn_size);
+  void gtpv1uSendDlDeliveryStatus(instance_t instance,
+                                  ue_id_t ue_id,
+                                  int bearer_id,
+                                  uint32_t desired_buffer_size,
+                                  uint32_t highest_delivered_sn);
   void gtpv1uSendEndMarker(instance_t instance, ue_id_t ue_id, int bearer_id);
   int newGtpuDeleteOneTunnel(instance_t instance, ue_id_t ue_id, int rb_id);
   int newGtpuDeleteAllTunnels(instance_t instance, ue_id_t ue_id);
@@ -160,7 +170,8 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
                                      ue_id_t ue_id,
                                      int bearer_id,
                                      uint8_t *buf,
-                                     size_t len);
+                                     size_t len,
+                                     uint32_t pdcp_count);
 
   instance_t gtpv1Init(openAddr_t context);
   int gtpv1Term(instance_t inst);

@@ -18,6 +18,7 @@
 #include "lib/f1ap_interface_management.h"
 #include "lib/f1ap_ue_context.h"
 #include "nrdc_mac_rrc_dl_handler.h"
+#include "f1u_dl_delivery.h"
 
 #include "executables/softmodem-common.h"
 
@@ -58,8 +59,30 @@ bool DURecvCb(protocol_ctxt_t *ctxt_pP,
   // The buffer comes from the stack in gtp-u thread, we have a make a separate buffer to enqueue in a inter-thread message queue
   uint8_t *sdu = malloc16(sdu_buffer_sizeP);
   memcpy(sdu, sdu_buffer_pP, sdu_buffer_sizeP);
-  nr_rlc_data_req(ctxt_pP, srb_flagP, rb_idP, muiP, sdu_buffer_sizeP, sdu);
+  /* DL USER DATA with Report Delivered: muiP is the NR PDCP PDU SN + 1 (GTP-U), 0
+   * (RLC_MUI_UNDEFINED) if none; RLC gets the SN as SDU ID for the DL DATA DELIVERY
+   * STATUS, -1 if no report is requested */
+  mui_t sdu_id = (mui_t)-1;
+  if (muiP != 0) {
+    sdu_id = muiP - 1;
+    f1u_dl_delivery_submitted(ctxt_pP->rntiMaybeUEid, rb_idP, sdu_id);
+  }
+  nr_rlc_data_req(ctxt_pP, srb_flagP, rb_idP, sdu_id, sdu_buffer_sizeP, sdu);
   return true;
+}
+
+/* RLC delivery confirmation of an F1-U DL SDU (RLC lock held) */
+static void du_dl_delivered(int ue_id, int rb_id, int sdu_id, int tx_space)
+{
+  if (sdu_id >= 0)
+    f1u_dl_delivery_delivered(ue_id, rb_id, sdu_id, tx_space > 0 ? tx_space : 0);
+}
+
+/* DL DATA DELIVERY STATUS toward the CU-UP (TS 38.425) */
+static void du_send_dl_delivery_status(uint32_t ue_id, int drb_id, uint32_t highest_delivered_sn, uint32_t desired_buffer_size)
+{
+  LOG_D(NR_MAC, "UE %x DRB %d: DL DATA DELIVERY STATUS, highest delivered NR PDCP SN %u\n", ue_id, drb_id, highest_delivered_sn);
+  gtpv1uSendDlDeliveryStatus(get_f1_gtp_instance(), ue_id, drb_id, desired_buffer_size, highest_delivered_sn);
 }
 
 /** @brief Fill and send request to create GTP-U tunnel on F1 */
@@ -71,6 +94,9 @@ static f1ap_up_tnl_t f1_drb_gtpu_create(const gtpv1u_gnb_create_tunnel_req_t *re
 
   instance_t f1inst = get_f1_gtp_instance();
   DevAssert(f1inst >= 0);
+  /* F1 split DU: report DL delivery to the CU-UP */
+  nr_rlc_set_dl_delivered_cb(du_dl_delivered);
+  f1u_dl_delivery_set_report_cb(du_send_dl_delivery_status);
   gtpv1u_gnb_create_tunnel_resp_t resp = {0};
   int ret = gtpv1u_create_ngu_tunnel(f1inst, req, &resp, DURecvCb, NULL, NULL);
   AssertFatal(ret >= 0, "Unable to create GTP Tunnel for F1-U\n");
@@ -106,6 +132,7 @@ void du_clear_all_ue_states()
     if (du_exists_f1_ue_data(rnti))
       du_remove_f1_ue_data(rnti);
     newGtpuDeleteAllTunnels(f1inst, rnti);
+    f1u_dl_delivery_remove_ue(rnti);
     UE = *mac->UE_info.connected_ue_list;
   }
   NR_SCHED_UNLOCK(&mac->sched_lock);
@@ -1033,8 +1060,10 @@ void ue_context_release_command(const f1ap_ue_context_rel_cmd_t *cmd)
   }
 
   instance_t f1inst = get_f1_gtp_instance();
-  if (f1inst >= 0)
+  if (f1inst >= 0) {
     newGtpuDeleteAllTunnels(f1inst, cmd->gNB_DU_ue_id);
+    f1u_dl_delivery_remove_ue(cmd->gNB_DU_ue_id);
+  }
 
   if (UE->UE_sched_ctrl.ul_failure || !cmd->rrc_container) {
     /* The UE is already not connected anymore or we have nothing to forward*/
