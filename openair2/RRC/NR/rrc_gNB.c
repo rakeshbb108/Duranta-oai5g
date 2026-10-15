@@ -2673,7 +2673,9 @@ void e1_send_bearer_updates(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, int n, f1ap_drb
   free_e1ap_context_mod_request(&req);
 }
 
-/** @brief Request PDCP status from CU-UP during inter-CU handover */
+/** @brief Request PDCP status from CU-UP during inter-CU handover. For Xn HO, the same
+ *  Bearer Context Modification carries the per-DRB DRB Data Forwarding Information
+ *  (DL forwarding tunnel at the target) received in the HANDOVER REQUEST ACKNOWLEDGE. */
 static void e1_request_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 {
   if (!is_cuup_associated(rrc))
@@ -2689,9 +2691,15 @@ static void e1_request_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 
   FOR_EACH_SEQ_ARR(drb_t *, drb, &UE->drbs) {
     DRB_nGRAN_to_mod_t drb_to_mod = {.id = drb->drb_id, .pdcp_sn_status_requested = true};
+    if (drb->dl_fwd_tnl.teid != 0) {
+      drb_to_mod.dl_fwd_tnl = calloc_or_fail(1, sizeof(*drb_to_mod.dl_fwd_tnl));
+      drb_to_mod.dl_fwd_tnl->teId = drb->dl_fwd_tnl.teid;
+      memcpy(&drb_to_mod.dl_fwd_tnl->tlAddress, drb->dl_fwd_tnl.addr.buffer, sizeof(in_addr_t));
+    }
     LOG_D(NR_RRC, "PDCP Status requested (drb_id=%d)\n", drb->drb_id);
     if (!append_e1_drb_mod_req(&req, UE, drb->drb_id, &drb_to_mod)) {
       LOG_W(NR_RRC, "UE %d: Failed to append E1 DRB mod for PDCP status request (DRB=%d)\n", UE->rrc_ue_id, drb->drb_id);
+      free(drb_to_mod.dl_fwd_tnl);
     }
   }
 
@@ -2700,9 +2708,9 @@ static void e1_request_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 }
 
 /** @brief Notify CU-UP with PDCP status during handover (N2 or Xn) */
-void e1_notify_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const rrc_drb_pdcp_status_t *drb_status)
+void e1_notify_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, int n, const rrc_drb_pdcp_status_t *drb_status)
 {
-  if (!is_cuup_associated(rrc) || !drb_status)
+  if (!is_cuup_associated(rrc) || n == 0)
     return;
 
   e1ap_bearer_mod_req_t req = {
@@ -2713,12 +2721,13 @@ void e1_notify_pdcp_status(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const rrc_drb_pd
   DevAssert(num_pdu_sessions > 0);
   req.pduSessionMod = calloc_or_fail(num_pdu_sessions, sizeof(*req.pduSessionMod));
 
-  FOR_EACH_SEQ_ARR(drb_t *, drb, &UE->drbs) {
-    if (drb->drb_id != drb_status->drb_id)
+  for (int i = 0; i < n; i++) {
+    drb_t *drb = get_drb(&UE->drbs, drb_status[i].drb_id);
+    if (!drb)
       continue;
     LOG_I(NR_RRC, "Forward PDCP Status to CU-UP (drb_id=%d)\n", drb->drb_id);
     bearer_context_pdcp_config_t pdcp_config = set_bearer_context_pdcp_config(drb->pdcp_config, rrc->configuration.um_on_default_drb, UE->redcap_cap);
-    DRB_nGRAN_to_mod_t drb_to_mod = get_e1_drb_mod_pdcp_status(drb, &pdcp_config, drb_status);
+    DRB_nGRAN_to_mod_t drb_to_mod = get_e1_drb_mod_pdcp_status(drb, &pdcp_config, &drb_status[i]);
     append_e1_drb_mod_req(&req, UE, drb->drb_id, &drb_to_mod);
   }
 

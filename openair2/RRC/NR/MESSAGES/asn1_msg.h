@@ -180,6 +180,20 @@ byte_array_t get_HandoverPreparationInformation(nr_rrc_reconfig_param_t *params)
 byte_array_t get_HandoverCommandMessage(nr_rrc_reconfig_param_t *params);
 void fill_removal_lists_from_source_measConfig(NR_MeasConfig_t *measConfig, byte_array_t prep_info);
 byte_array_t extract_ue_cap_from_HandoverPreparationInformation(byte_array_t prep_info);
+
+/* DRB configuration of the source, as read from HandoverPreparationInformation sourceConfig */
+typedef struct {
+  int drb_id;
+  int pdusession_id;
+  // PDCP SN size; 0 if absent or if UL and DL differ
+  int sn_size;
+  bool integrity;
+  bool ciphering_disabled;
+  bool default_drb;
+  bool sdap_header_ul;
+  bool sdap_header_dl;
+} nr_rrc_source_drb_t;
+int get_source_drbs_from_HandoverPreparationInformation(byte_array_t prep_info, nr_rrc_source_drb_t *out, int max);
 byte_array_t doRRCReconfiguration_from_HandoverCommand(byte_array_t handoverCommand);
 
 struct NR_UE_NR_Capability *get_ue_nr_capability(int rnti, uint8_t *buf, uint32_t len);

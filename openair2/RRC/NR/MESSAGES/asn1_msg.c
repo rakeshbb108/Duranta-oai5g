@@ -1422,6 +1422,71 @@ byte_array_t extract_ue_cap_from_HandoverPreparationInformation(byte_array_t pre
   return out;
 }
 
+/** @brief Read the DRBs of the source configuration (radioBearerConfig drb-ToAddModList of
+ *  the sourceConfig RRCReconfiguration) from a HandoverPreparationInformation.
+ *  @return number of DRBs written to out, or -1 if the message cannot be decoded */
+int get_source_drbs_from_HandoverPreparationInformation(byte_array_t prep_info, nr_rrc_source_drb_t *out, int max)
+{
+  NR_HandoverPreparationInformation_t *hpi = NULL;
+  asn_dec_rval_t dec_rval =
+      uper_decode_complete(NULL, &asn_DEF_NR_HandoverPreparationInformation, (void **)&hpi, prep_info.buf, prep_info.len);
+  if (dec_rval.code != RC_OK || hpi->criticalExtensions.present != NR_HandoverPreparationInformation__criticalExtensions_PR_c1
+      || hpi->criticalExtensions.choice.c1->present
+             != NR_HandoverPreparationInformation__criticalExtensions__c1_PR_handoverPreparationInformation) {
+    LOG_E(NR_RRC, "Failed to decode HandoverPreparationInformation to read the source DRBs\n");
+    ASN_STRUCT_FREE(asn_DEF_NR_HandoverPreparationInformation, hpi);
+    return -1;
+  }
+  NR_AS_Config_t *sourceConfig = hpi->criticalExtensions.choice.c1->choice.handoverPreparationInformation->sourceConfig;
+  if (!sourceConfig) {
+    ASN_STRUCT_FREE(asn_DEF_NR_HandoverPreparationInformation, hpi);
+    return 0;
+  }
+  NR_RRCReconfiguration_t *reconf = NULL;
+  dec_rval = uper_decode_complete(NULL,
+                                  &asn_DEF_NR_RRCReconfiguration,
+                                  (void **)&reconf,
+                                  sourceConfig->rrcReconfiguration.buf,
+                                  sourceConfig->rrcReconfiguration.size);
+  ASN_STRUCT_FREE(asn_DEF_NR_HandoverPreparationInformation, hpi);
+  if (dec_rval.code != RC_OK
+      || reconf->criticalExtensions.present != NR_RRCReconfiguration__criticalExtensions_PR_rrcReconfiguration) {
+    LOG_E(NR_RRC, "Failed to decode sourceConfig RRCReconfiguration\n");
+    ASN_STRUCT_FREE(asn_DEF_NR_RRCReconfiguration, reconf);
+    return -1;
+  }
+
+  int n = 0;
+  const NR_RadioBearerConfig_t *rbc = reconf->criticalExtensions.choice.rrcReconfiguration->radioBearerConfig;
+  const NR_DRB_ToAddModList_t *list = rbc ? rbc->drb_ToAddModList : NULL;
+  for (int i = 0; list && i < list->list.count && n < max; i++) {
+    const NR_DRB_ToAddMod_t *drb = list->list.array[i];
+    nr_rrc_source_drb_t *o = &out[n++];
+    *o = (nr_rrc_source_drb_t){.drb_id = drb->drb_Identity};
+    if (drb->cnAssociation && drb->cnAssociation->present == NR_DRB_ToAddMod__cnAssociation_PR_sdap_Config) {
+      const NR_SDAP_Config_t *sdap = drb->cnAssociation->choice.sdap_Config;
+      o->pdusession_id = sdap->pdu_Session;
+      o->default_drb = sdap->defaultDRB;
+      o->sdap_header_ul = sdap->sdap_HeaderUL == NR_SDAP_Config__sdap_HeaderUL_present;
+      o->sdap_header_dl = sdap->sdap_HeaderDL == NR_SDAP_Config__sdap_HeaderDL_present;
+    }
+    const NR_PDCP_Config_t *pdcp = drb->pdcp_Config;
+    if (pdcp && pdcp->drb) {
+      const long *ul = pdcp->drb->pdcp_SN_SizeUL, *dl = pdcp->drb->pdcp_SN_SizeDL;
+      if (ul && dl && *ul == NR_PDCP_Config__drb__pdcp_SN_SizeUL_len12bits
+          && *dl == NR_PDCP_Config__drb__pdcp_SN_SizeDL_len12bits)
+        o->sn_size = 12;
+      else if (ul && dl && *ul == NR_PDCP_Config__drb__pdcp_SN_SizeUL_len18bits
+               && *dl == NR_PDCP_Config__drb__pdcp_SN_SizeDL_len18bits)
+        o->sn_size = 18;
+      o->integrity = pdcp->drb->integrityProtection != NULL;
+    }
+    o->ciphering_disabled = pdcp && pdcp->ext1 && pdcp->ext1->cipheringDisabled;
+  }
+  ASN_STRUCT_FREE(asn_DEF_NR_RRCReconfiguration, reconf);
+  return n;
+}
+
 byte_array_t doRRCReconfiguration_from_HandoverCommand(const byte_array_t handoverCommand)
 {
   DevAssert(handoverCommand.buf);

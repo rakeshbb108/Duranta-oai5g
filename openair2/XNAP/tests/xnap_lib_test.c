@@ -317,6 +317,13 @@ static void test_xn_handover_request(void)
   pdusession_list[0].pdu_session_type = PDUSessionType_ipv4;
   pdusession_list[0].num_qos = 2;
   pdusession_list[0].qos_list = qos_list;
+  /* source proposes DL forwarding for QFI 1 only; DRB 1 carries QFI 1 and 2 (AM), DRB 2 none */
+  qos_list[0].dl_fwd_proposed = true;
+  pdusession_list[0].num_src_drb = 1;
+  pdusession_list[0].src_drb_map = calloc_or_fail(1, sizeof(*pdusession_list[0].src_drb_map));
+  pdusession_list[0].src_drb_map[0] = (xnap_drb_qos_map_item_t){.drb_id = 1, .num_qfi = 2, .qfi = {1, 2}};
+  pdusession_list[0].src_drb_map[0].rlc_mode = malloc_or_fail(sizeof(xnap_rlc_mode_t));
+  *pdusession_list[0].src_drb_map[0].rlc_mode = XNAP_RLC_MODE_AM;
 
   /* ----- PDU Session 2 (IMS) ----- */
   nssai_t nssai_ims = {.sst = 1, .sd = 0x000002};
@@ -430,6 +437,11 @@ static void test_xn_handover_request_acknowledge(void)
   pdu_list[0].pdusession_id = 10;
   pdu_list[0].num_qos = 2;
   pdu_list[0].qos_list = qos_list_1;
+  pdu_list[0].num_qos_fwd = 1;
+  pdu_list[0].qos_fwd[0] = 5;
+  pdu_list[0].num_drb_fwd = 1;
+  pdu_list[0].drb_fwd_list[0] =
+      (xnap_drb_fwd_item_t){.drb_id = 1, .dl_fwd_tnl = {.teid = 0xabcd, .addr = {.length = 4, .buffer = {10, 0, 0, 1}}}};
 
   pdu_list[1].pdusession_id = 15;
   pdu_list[1].num_qos = 1;
@@ -879,6 +891,13 @@ static void test_xn_retrieve_ue_context_response(void)
   pdusession_list[0].pdu_session_type = PDUSessionType_ipv4;
   pdusession_list[0].num_qos = 2;
   pdusession_list[0].qos_list = qos_list;
+  /* source proposes DL forwarding for QFI 1 only; DRB 1 carries QFI 1 and 2 (AM), DRB 2 none */
+  qos_list[0].dl_fwd_proposed = true;
+  pdusession_list[0].num_src_drb = 1;
+  pdusession_list[0].src_drb_map = calloc_or_fail(1, sizeof(*pdusession_list[0].src_drb_map));
+  pdusession_list[0].src_drb_map[0] = (xnap_drb_qos_map_item_t){.drb_id = 1, .num_qfi = 2, .qfi = {1, 2}};
+  pdusession_list[0].src_drb_map[0].rlc_mode = malloc_or_fail(sizeof(xnap_rlc_mode_t));
+  *pdusession_list[0].src_drb_map[0].rlc_mode = XNAP_RLC_MODE_AM;
 
   xnap_security_capabilities_t security_cap = {.nRencryption_algorithms = 0xC000,
                                                .nRintegrity_algorithms = 0xC000,

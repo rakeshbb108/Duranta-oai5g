@@ -366,6 +366,60 @@ static void test_rrc_qos(void)
   LOG_A(NR_RRC, "QoS test completed successfully\n");
 }
 
+/* Xn HO target: source DRBs kept with their ID, PDCP SN size and QoS flows; other flows
+ * get new DRBs whose IDs avoid all source DRB IDs */
+static void test_rrc_keep_source_drbs(void)
+{
+  gNB_RRC_INST rrc = {0};
+  rrc.configuration.enable_sdap = true;
+  rrc.pdcp_config.drb.sn_size = 18;
+
+  gNB_RRC_UE_t ue = {0};
+  ue.rrc_ue_id = 1;
+  seq_arr_init(&ue.pduSessions, sizeof(rrc_pdu_session_param_t));
+  seq_arr_init(&ue.drbs, sizeof(drb_t));
+
+  pdusession_t session = {.pdusession_id = 1};
+  seq_arr_init(&session.qos, sizeof(nr_rrc_qos_t));
+  pdusession_level_qos_parameter_t default_flow = {
+      .qfi = 1,
+      .fiveQI_type = NON_DYNAMIC,
+      .qos_characteristics.non_dynamic.fiveQI = 9,
+  };
+  nr_rrc_qos_t *q1 = add_qos(&session.qos, &default_flow);
+  default_flow.qfi = 2;
+  nr_rrc_qos_t *q2 = add_qos(&session.qos, &default_flow);
+  qos_priority_level_t prio = 1;
+  pdusession_level_qos_parameter_t dedicated_flow = {
+      .qfi = 20,
+      .fiveQI_type = NON_DYNAMIC,
+      .qos_characteristics.non_dynamic = {.fiveQI = 80, .qos_priority = &prio},
+  };
+  nr_rrc_qos_t *q20 = add_qos(&session.qos, &dedicated_flow);
+  AssertFatal(q1 && q2 && q20, "Failed to add QoS flows\n");
+
+  /* source had DRB 1 (released) and DRB 3 (kept, 12-bit SN, default DRB, QFI 1 and 2) */
+  nr_rrc_kept_drb_t kept =
+      {.drb_id = 3, .pdusession_id = 1, .sn_size = 12, .num_qfi = 2, .qfi = {1, 2}, .default_drb = true, .dl_fwd = true};
+  uint64_t src_drb_ids = (1ULL << 1) | (1ULL << 3);
+  nr_rrc_add_bearers_keep_source(&rrc, &ue, 1, &session, &kept, 1, src_drb_ids);
+
+  drb_t *d3 = get_drb(&ue.drbs, 3);
+  AssertFatal(d3 && d3->xn_kept && d3->xn_fwd, "source DRB 3 not kept\n");
+  AssertFatal(d3->pdcp_config.drb.sn_size == 12, "kept DRB must use the source PDCP SN size\n");
+  AssertFatal(q1->drb_id == 3 && q2->drb_id == 3, "QFI 1/2 must stay on DRB 3\n");
+  AssertFatal(q20->drb_id == 2, "new DRB must avoid source DRB IDs 1 and 3, got %d\n", q20->drb_id);
+  drb_t *d2 = get_drb(&ue.drbs, 2);
+  AssertFatal(d2 && !d2->xn_kept && !d2->xn_fwd && d2->pdcp_config.drb.sn_size == 18, "new DRB 2 config\n");
+  AssertFatal(get_drb(&ue.drbs, 1) == NULL, "released source DRB ID 1 reused\n");
+  rrc_pdu_session_param_t *pdu = find_pduSession(&ue.pduSessions, 1);
+  AssertFatal(pdu && pdu->param.sdap_config.default_drb == 3, "default DRB must be the source one\n");
+
+  seq_arr_free(&ue.pduSessions, free_pdusession);
+  seq_arr_free(&ue.drbs, free_drb);
+  LOG_A(NR_RRC, "Keep source DRBs test completed successfully\n");
+}
+
 int main()
 {
   // Initialize logging system
@@ -378,6 +432,8 @@ int main()
   test_rrc_drb();
   // QoS (including multi-QoS)
   test_rrc_qos();
+  // Xn HO target: keep source DRBs
+  test_rrc_keep_source_drbs();
   LOG_A(NR_RRC, "All RRC Bearers tests passed successfully!\n");
   return 0;
 }

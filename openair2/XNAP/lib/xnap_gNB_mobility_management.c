@@ -10,6 +10,10 @@
 #include "xnap_lib_common.h"
 #include "XNAP_DataForwardingResponseDRBItemList.h"
 #include "XNAP_DataForwardingResponseDRBItem.h"
+#include "XNAP_DRBToQoSFlowMapping-List.h"
+#include "XNAP_DRBToQoSFlowMapping-Item.h"
+#include "XNAP_QoSFlow-Item.h"
+#include "XNAP_QoSFLowsAcceptedToBeForwarded-Item.h"
 
 /**
  * @brief XnAP security capabilities encoding
@@ -234,16 +238,70 @@ static void xnap_encode_pdusession_resources_to_be_setup_list(const xnap_pdusess
       arp->pre_emption_vulnerability = qos->qos_params.arp.pre_emp_vulnerability;
     }
 
-    if (pdu->dl_forwarding_proposed) {
+    /* DataforwardingandOffloadingInfofromSource: qosFlowsToBeForwarded is mandatory
+     * (SIZE(1..)), so the IE, and the source DRB mapping in it, needs a proposed flow */
+    int num_fwd = 0;
+    for (int j = 0; j < pdu->num_qos; j++)
+      num_fwd += pdu->qos_list[j].dl_fwd_proposed;
+    if (num_fwd > 0) {
       asn1cCalloc(pduItem->dataforwardinginfofromSource, fwdInfo);
       for (int j = 0; j < pdu->num_qos; j++) {
+        if (!pdu->qos_list[j].dl_fwd_proposed)
+          continue;
         asn1cSequenceAdd(fwdInfo->qosFlowsToBeForwarded.list, XNAP_QoSFLowsToBeForwarded_Item_t, fwdItem);
         fwdItem->qosFlowIdentifier = pdu->qos_list[j].qfi;
         fwdItem->dl_dataforwarding = XNAP_DLForwarding_dl_forwarding_proposed;
+        /* ULForwarding has no "not proposed" value; the target never allocates UL forwarding */
         fwdItem->ul_dataforwarding = XNAP_ULForwarding_ul_forwarding_proposed;
+      }
+      if (pdu->num_src_drb > 0) {
+        asn1cCalloc(fwdInfo->sourceDRBtoQoSFlowMapping, mapList);
+        for (int k = 0; k < pdu->num_src_drb; k++) {
+          const xnap_drb_qos_map_item_t *m = &pdu->src_drb_map[k];
+          asn1cSequenceAdd(mapList->list, XNAP_DRBToQoSFlowMapping_Item_t, mapItem);
+          mapItem->drb_ID = m->drb_id;
+          DevAssert(m->num_qfi > 0);
+          for (int q = 0; q < m->num_qfi; q++) {
+            asn1cSequenceAdd(mapItem->qosFlows_List.list, XNAP_QoSFlow_Item_t, qfItem);
+            qfItem->qfi = m->qfi[q];
+          }
+          if (m->rlc_mode)
+            asn1cCallocOne(mapItem->rLC_Mode, *m->rlc_mode);
+        }
       }
     }
   }
+}
+
+static bool decode_xnap_dataforwarding_info_from_source(const XNAP_DataforwardingandOffloadingInfofromSource_t *in,
+                                                        xnap_pdusession_resources_tobe_setup_item_t *out)
+{
+  for (int i = 0; i < in->qosFlowsToBeForwarded.list.count; i++) {
+    const XNAP_QoSFLowsToBeForwarded_Item_t *f = in->qosFlowsToBeForwarded.list.array[i];
+    for (int j = 0; j < out->num_qos; j++)
+      if (out->qos_list[j].qfi == f->qosFlowIdentifier)
+        out->qos_list[j].dl_fwd_proposed = true;
+  }
+  const XNAP_DRBToQoSFlowMapping_List_t *mapList = in->sourceDRBtoQoSFlowMapping;
+  if (!mapList)
+    return true;
+  AssertError(mapList->list.count <= MAX_DRBS_PER_UE, return false, "too many source DRBs: %d\n", mapList->list.count);
+  out->num_src_drb = mapList->list.count;
+  out->src_drb_map = calloc_or_fail(out->num_src_drb, sizeof(*out->src_drb_map));
+  for (int k = 0; k < out->num_src_drb; k++) {
+    const XNAP_DRBToQoSFlowMapping_Item_t *mapItem = mapList->list.array[k];
+    xnap_drb_qos_map_item_t *m = &out->src_drb_map[k];
+    m->drb_id = mapItem->drb_ID;
+    AssertError(mapItem->qosFlows_List.list.count <= MAX_QOS_FLOWS, return false, "too many QoS flows on DRB %d\n", m->drb_id);
+    m->num_qfi = mapItem->qosFlows_List.list.count;
+    for (int q = 0; q < m->num_qfi; q++)
+      m->qfi[q] = mapItem->qosFlows_List.list.array[q]->qfi;
+    if (mapItem->rLC_Mode) {
+      m->rlc_mode = malloc_or_fail(sizeof(*m->rlc_mode));
+      *m->rlc_mode = *mapItem->rLC_Mode;
+    }
+  }
+  return true;
 }
 
 /**
@@ -275,8 +333,9 @@ static bool decode_xnap_pdusession_resources_to_be_setup_list(const XNAP_PDUSess
     if (!decode_xnap_qos_flows_to_be_setup_list(&pdu->qosFlowsToBeSetup_List, dst))
       return false;
 
-    if (pdu->dataforwardinginfofromSource)
-      dst->dl_forwarding_proposed = true;
+    if (pdu->dataforwardinginfofromSource
+        && !decode_xnap_dataforwarding_info_from_source(pdu->dataforwardinginfofromSource, dst))
+      return false;
   }
 
   return true;
@@ -502,7 +561,20 @@ static bool eq_xnap_qos_flow_param(const xnap_qos_flow_param_t *a, const xnap_qo
 static bool eq_xnap_qos_tobe_setup_item(const xnap_qos_flow_tobe_setup_item_t *a, const xnap_qos_flow_tobe_setup_item_t *b)
 {
   _EQ_CHECK_INT(a->qfi, b->qfi);
+  _EQ_CHECK_INT(a->dl_fwd_proposed, b->dl_fwd_proposed);
   return eq_xnap_qos_flow_param(&a->qos_params, &b->qos_params);
+}
+
+static bool eq_xnap_drb_qos_map_item(const xnap_drb_qos_map_item_t *a, const xnap_drb_qos_map_item_t *b)
+{
+  _EQ_CHECK_INT(a->drb_id, b->drb_id);
+  _EQ_CHECK_INT(a->num_qfi, b->num_qfi);
+  for (int i = 0; i < a->num_qfi; i++)
+    _EQ_CHECK_INT(a->qfi[i], b->qfi[i]);
+  _EQ_CHECK_OPTIONAL_PTR(a, b, rlc_mode);
+  if (a->rlc_mode)
+    _EQ_CHECK_INT(*a->rlc_mode, *b->rlc_mode);
+  return true;
 }
 
 static bool eq_xnap_pdusession_resources_tobe_setup_item(const xnap_pdusession_resources_tobe_setup_item_t *a,
@@ -521,6 +593,12 @@ static bool eq_xnap_pdusession_resources_tobe_setup_item(const xnap_pdusession_r
 
   for (int i = 0; i < a->num_qos; i++) {
     if (!eq_xnap_qos_tobe_setup_item(&a->qos_list[i], &b->qos_list[i]))
+      return false;
+  }
+
+  _EQ_CHECK_INT(a->num_src_drb, b->num_src_drb);
+  for (int i = 0; i < a->num_src_drb; i++) {
+    if (!eq_xnap_drb_qos_map_item(&a->src_drb_map[i], &b->src_drb_map[i]))
       return false;
   }
 
@@ -637,6 +715,9 @@ static void free_xnap_pdusession_resources_tobe_setup_list(xnap_pdusession_resou
   for (int i = 0; i < num_pdu; i++) {
     free(pdu_list[i].nssai);
     free_xnap_qos_tobe_setup_list(pdu_list[i].qos_list, pdu_list[i].num_qos);
+    for (int k = 0; k < pdu_list[i].num_src_drb; k++)
+      free(pdu_list[i].src_drb_map[k].rlc_mode);
+    free(pdu_list[i].src_drb_map);
   }
   free(pdu_list);
 }
@@ -733,26 +814,27 @@ XNAP_XnAP_PDU_t *encode_xnap_handover_request_acknowledge(const xnap_handover_re
       qosItem->qfi = qos->qfi;
     }
 
-    /* DL forwarding tunnels (optional): DataForwardingInfoFromTargetNGRANnode
-     * with per-DRB dataForwardingResponseDRBItemList (TS 38.423 9.2.3.24) */
-    if (pdu->num_drb_fwd > 0) {
+    /* DataForwardingInfoFromTargetNGRANnode (O): QoS flows accepted for data forwarding (M)
+     * and the per-DRB dataForwardingResponseDRBItemList (O) */
+    if (pdu->num_qos_fwd > 0) {
       asn1cCalloc(pduItem->pduSessionResourceAdmittedInfo.dataForwardingInfoFromTarget, fwdInfo);
 
-      /* QoS flows accepted for DL forwarding: same set as admitted */
-      for (int j = 0; j < pdu->num_qos; j++) {
+      for (int j = 0; j < pdu->num_qos_fwd; j++) {
         asn1cSequenceAdd(fwdInfo->qosFlowsAcceptedForDataForwarding_List.list,
                          XNAP_QoSFLowsAcceptedToBeForwarded_Item_t, fwdQos);
-        fwdQos->qosFlowIdentifier = pdu->qos_list[j].qfi;
+        fwdQos->qosFlowIdentifier = pdu->qos_fwd[j];
       }
 
       /* per-DRB DL forwarding tunnels on the target CU-UP */
-      asn1cCalloc(fwdInfo->dataForwardingResponseDRBItemList, drbList);
-      for (int k = 0; k < pdu->num_drb_fwd; k++) {
-        const xnap_drb_fwd_item_t *fwd = &pdu->drb_fwd_list[k];
-        asn1cSequenceAdd(drbList->list, XNAP_DataForwardingResponseDRBItem_t, drbItem);
-        drbItem->drb_ID = fwd->drb_id;
-        asn1cCalloc(drbItem->dlForwardingUPTNL, dlFwdTnl);
-        *dlFwdTnl = xnap_encode_ul_ngu_tnl_info(&fwd->dl_fwd_tnl);
+      if (pdu->num_drb_fwd > 0) {
+        asn1cCalloc(fwdInfo->dataForwardingResponseDRBItemList, drbList);
+        for (int k = 0; k < pdu->num_drb_fwd; k++) {
+          const xnap_drb_fwd_item_t *fwd = &pdu->drb_fwd_list[k];
+          asn1cSequenceAdd(drbList->list, XNAP_DataForwardingResponseDRBItem_t, drbItem);
+          drbItem->drb_ID = fwd->drb_id;
+          asn1cCalloc(drbItem->dlForwardingUPTNL, dlFwdTnl);
+          *dlFwdTnl = xnap_encode_ul_ngu_tnl_info(&fwd->dl_fwd_tnl);
+        }
       }
     }
   }
@@ -850,6 +932,13 @@ bool decode_xnap_handover_request_acknowledge(xnap_handover_req_ack_t *out, cons
             /* Per-DRB DL forwarding tunnels (optional): dataForwardingResponseDRBItemList */
             const XNAP_DataForwardingInfoFromTargetNGRANnode_t *fwdInfo =
                 pduItem->pduSessionResourceAdmittedInfo.dataForwardingInfoFromTarget;
+            if (fwdInfo) {
+              const XNAP_QoSFLowsAcceptedToBeForwarded_List_t *accepted = &fwdInfo->qosFlowsAcceptedForDataForwarding_List;
+              AssertError(accepted->list.count <= MAX_QOS_FLOWS, return false, "too many QoS flows accepted for forwarding\n");
+              dst->num_qos_fwd = accepted->list.count;
+              for (int k = 0; k < dst->num_qos_fwd; k++)
+                dst->qos_fwd[k] = accepted->list.array[k]->qosFlowIdentifier;
+            }
             if (fwdInfo && fwdInfo->dataForwardingResponseDRBItemList) {
               const XNAP_DataForwardingResponseDRBItemList_t *drbList = fwdInfo->dataForwardingResponseDRBItemList;
               int n = drbList->list.count;
@@ -903,6 +992,10 @@ static bool eq_xnap_pdusession_admitted_item(const xnap_pdusession_admitted_item
     if (!eq_xnap_qos_admitted_item(&a->qos_list[i], &b->qos_list[i]))
       return false;
   }
+
+  _EQ_CHECK_INT(a->num_qos_fwd, b->num_qos_fwd);
+  for (int i = 0; i < a->num_qos_fwd; i++)
+    _EQ_CHECK_INT(a->qos_fwd[i], b->qos_fwd[i]);
 
   _EQ_CHECK_INT(a->num_drb_fwd, b->num_drb_fwd);
   for (int i = 0; i < a->num_drb_fwd; i++) {

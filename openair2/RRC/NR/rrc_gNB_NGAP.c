@@ -343,8 +343,8 @@ static DRB_nGRAN_to_setup_t fill_e1_drb_to_setup(const drb_t *rrc_drb,
 {
   DRB_nGRAN_to_setup_t drb_ngran = {0};
   drb_ngran.id = rrc_drb->drb_id;
-  // Xn HO: request a per-DRB DL forwarding tunnel when the source proposed forwarding
-  drb_ngran.dl_fwd_tnl_req = session->dl_forwarding_proposed;
+  // Xn HO target: DRB Data Forwarding Information Request for DRBs accepted for DL forwarding
+  drb_ngran.dl_fwd_tnl_req = rrc_drb->xn_fwd;
 
   drb_ngran.sdap_config.defaultDRB = (session->sdap_config.default_drb == drb_ngran.id);
   drb_ngran.sdap_config.sDAP_Header_UL = !session->sdap_config.header_ul_absent;
@@ -2221,6 +2221,7 @@ int rrc_gNB_process_NGAP_DL_RAN_STATUS_TRANSFER(MessageDef *msg_p, instance_t in
         cmd->gnb_ue_ngap_id,
         cmd->amf_ue_ngap_id);
 
+  rrc_drb_pdcp_status_t status[MAX_DRBS_PER_UE];
   for (int i = 0; i < cmd->ran_status.nb_drb; ++i) {
     const ngap_drb_status_t *s = &cmd->ran_status.drb_status_list[i];
     LOG_I(NR_RRC,
@@ -2233,13 +2234,13 @@ int rrc_gNB_process_NGAP_DL_RAN_STATUS_TRANSFER(MessageDef *msg_p, instance_t in
           s->dl_count.pdcp_sn, s->dl_count.hfn,
           s->dl_count.sn_len == NGAP_SN_LENGTH_18 ? "18-bit" : "12-bit");
 
-    rrc_drb_pdcp_status_t status = {
+    status[i] = (rrc_drb_pdcp_status_t){
       .drb_id   = s->drb_id,
       .ul_count = {.sn = s->ul_count.pdcp_sn, .hfn = s->ul_count.hfn},
       .dl_count = {.sn = s->dl_count.pdcp_sn, .hfn = s->dl_count.hfn},
     };
-    e1_notify_pdcp_status(rrc, UE, &status);
   }
+  e1_notify_pdcp_status(rrc, UE, cmd->ran_status.nb_drb, status);
 
   return 0;
 }

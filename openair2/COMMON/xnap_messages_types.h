@@ -277,7 +277,28 @@ typedef struct {
   uint8_t qfi;
   // QoS Flow Level QoS Parameters (M)
   xnap_qos_flow_param_t qos_params;
+  // DL forwarding proposed by the source (QoSFLowsToBeForwarded-Item)
+  bool dl_fwd_proposed;
 } xnap_qos_flow_tobe_setup_item_t;
+
+/* RLCMode */
+typedef enum {
+  XNAP_RLC_MODE_AM,
+  XNAP_RLC_MODE_UM_BIDIRECTIONAL,
+  XNAP_RLC_MODE_UM_UNIDIRECTIONAL_UL,
+  XNAP_RLC_MODE_UM_UNIDIRECTIONAL_DL,
+} xnap_rlc_mode_t;
+
+/* DRBToQoSFlowMapping-Item */
+typedef struct {
+  // DRB ID (M)
+  uint8_t drb_id;
+  // QoS Flows List (M)
+  uint8_t num_qfi;
+  uint8_t qfi[MAX_QOS_FLOWS];
+  // RLC Mode (O)
+  xnap_rlc_mode_t *rlc_mode;
+} xnap_drb_qos_map_item_t;
 
 /* 3GPP TS 38.423 9.2.1.1 PDU Session Resources To Be Setup Item */
 typedef struct {
@@ -292,8 +313,9 @@ typedef struct {
   // QoS Flows To Be Setup List (M)
   uint8_t num_qos;
   xnap_qos_flow_tobe_setup_item_t *qos_list;
-  // Source proposed DL forwarding for this session (from dataforwardinginfofromSource IE)
-  bool dl_forwarding_proposed;
+  // Source DRB to QoS Flow Mapping List (O), in DataforwardingandOffloadingInfofromSource
+  uint8_t num_src_drb;
+  xnap_drb_qos_map_item_t *src_drb_map;
 } xnap_pdusession_resources_tobe_setup_item_t;
 
 typedef struct {
@@ -373,6 +395,9 @@ typedef struct {
   // QoS Flows Admitted List
   uint8_t num_qos;
   xnap_qos_admitted_item_t *qos_list;
+  // QoS Flows Accepted For Data Forwarding (in DataForwardingInfoFromTargetNGRANnode)
+  uint8_t num_qos_fwd;
+  uint8_t qos_fwd[MAX_QOS_FLOWS];
   // Per-DRB DL forwarding tunnels (dataForwardingResponseDRBItemList)
   uint8_t num_drb_fwd;
   xnap_drb_fwd_item_t drb_fwd_list[MAX_DRBS_PER_UE];

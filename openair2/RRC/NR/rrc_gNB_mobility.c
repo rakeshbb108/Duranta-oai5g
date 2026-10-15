@@ -464,6 +464,13 @@ static byte_array_t rrc_gNB_encode_HandoverCommand(gNB_RRC_UE_t *UE, gNB_RRC_INS
   nr_rrc_reconfig_param_t params = get_RRCReconfiguration_params(rrc, UE, (1 << 1) | (1 << 2), true);
   UE->xids[params.transaction_id] = RRC_DEDICATED_RECONF;
 
+  /* Xn: release the source DRBs this gNB does not keep (drb-ToReleaseList) */
+  const nr_ho_target_cu_t *target = UE->ho_context->target;
+  if (target->n_src_drb_rel > 0 && !params.drb_rel)
+    params.drb_rel = calloc_or_fail(MAX_DRBS_PER_UE, sizeof(int));
+  for (int i = 0; i < target->n_src_drb_rel && params.n_drb_rel < MAX_DRBS_PER_UE; i++)
+    params.drb_rel[params.n_drb_rel++] = target->src_drb_rel[i];
+
   params.security_config = sec;
   params.masterKeyUpdate = true;
   params.nextHopChainingCount = UE->nh_ncc;

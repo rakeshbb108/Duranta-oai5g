@@ -105,7 +105,6 @@ bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
     item->pdusession_id         = ps->pdusession_id;
     item->pdu_session_type      = ps->pdu_session_type;
     item->n3_incoming           = ps->n3_incoming;
-    item->dl_forwarding_proposed = true;
 
     nssai_t *nssai_copy = malloc(sizeof(*nssai_copy));
     AssertFatal(nssai_copy != NULL, "malloc failed for nssai\n");
@@ -125,6 +124,7 @@ bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
       xnap_qos_flow_tobe_setup_item_t *qi = &item->qos_list[j];
 
       qi->qfi = qp->qfi;
+      qi->dl_fwd_proposed = true;
       qi->qos_params.qos_type = qp->fiveQI_type;
       if (qp->fiveQI_type == NON_DYNAMIC) {
         qi->qos_params.nondyn.fiveQI = qp->qos_characteristics.non_dynamic.fiveQI;
@@ -135,6 +135,24 @@ bool rrc_gNB_send_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc,
         qi->qos_params.dyn.per.exponent = qp->qos_characteristics.dynamic.per.exponent;
       }
       qi->qos_params.arp = qp->arp;
+    }
+
+    /* Source DRB to QoS Flow Mapping List: lets the target keep each DRB as-is */
+    item->src_drb_map = calloc_or_fail(MAX_DRBS_PER_UE, sizeof(*item->src_drb_map));
+    FOR_EACH_SEQ_ARR (drb_t *, drb, &UE->drbs) {
+      if (drb->pdusession_id != ps->pdusession_id)
+        continue;
+      xnap_drb_qos_map_item_t *m = &item->src_drb_map[item->num_src_drb];
+      m->drb_id = drb->drb_id;
+      FOR_EACH_SEQ_ARR (nr_rrc_qos_t *, q, &ps->qos) {
+        if (q->drb_id == drb->drb_id)
+          m->qfi[m->num_qfi++] = q->qos.qfi;
+      }
+      if (m->num_qfi == 0)
+        continue;
+      m->rlc_mode = malloc_or_fail(sizeof(*m->rlc_mode));
+      *m->rlc_mode = rrc->configuration.um_on_default_drb ? XNAP_RLC_MODE_UM_BIDIRECTIONAL : XNAP_RLC_MODE_AM;
+      item->num_src_drb++;
     }
   }
 
@@ -215,6 +233,78 @@ static void set_UE_security_algos_xn(const gNB_RRC_INST *rrc,
                UE->ciphering_algorithm, UE->integrity_algorithm);
 }
 
+/** @brief Xn HO target: select the source DRBs to keep unchanged (same DRB ID, PDCP SN size and
+ *  QoS flows), from the Source DRB to QoS Flow Mapping List (TS 38.423) and the source
+ *  radio bearer configuration in HandoverPreparationInformation sourceConfig (TS 38.331).
+ *  A DRB whose configuration this gNB cannot keep is not kept, hence not forwarded.
+ *  @param src_drb_ids set to the IDs of all DRBs of the source configuration (bit n: DRB n)
+ *  @return number of kept DRBs */
+static int xn_select_kept_drbs(const gNB_RRC_INST *rrc,
+                               const xnap_ue_context_info_t *ctx,
+                               nr_rrc_kept_drb_t kept[MAX_DRBS_PER_UE],
+                               uint64_t *src_drb_ids)
+{
+  nr_rrc_source_drb_t src[MAX_DRBS_PER_UE];
+  int n_src = get_source_drbs_from_HandoverPreparationInformation(ctx->rrc_context, src, MAX_DRBS_PER_UE);
+  *src_drb_ids = 0;
+  for (int i = 0; i < n_src; i++)
+    *src_drb_ids |= 1ULL << src[i].drb_id;
+
+  const xnap_rlc_mode_t rlc_mode = rrc->configuration.um_on_default_drb ? XNAP_RLC_MODE_UM_BIDIRECTIONAL : XNAP_RLC_MODE_AM;
+  const bool sdap_header = rrc->configuration.enable_sdap;
+  int n_kept = 0;
+  for (int p = 0; p < ctx->num_pdu; p++) {
+    const xnap_pdusession_resources_tobe_setup_item_t *pdu = &ctx->pdusession_resources_tobe_setup_list[p];
+    for (int k = 0; k < pdu->num_src_drb; k++) {
+      const xnap_drb_qos_map_item_t *m = &pdu->src_drb_map[k];
+      const nr_rrc_source_drb_t *sd = NULL;
+      for (int i = 0; i < n_src; i++)
+        if (src[i].drb_id == m->drb_id)
+          sd = &src[i];
+      const char *why = NULL;
+      if (!sd || sd->pdusession_id != pdu->pdusession_id)
+        why = "not in sourceConfig";
+      else if (sd->sn_size == 0)
+        why = "unknown PDCP SN size";
+      else if (!m->rlc_mode || *m->rlc_mode != rlc_mode)
+        why = "RLC mode";
+      else if (sd->integrity != (rrc->security.do_drb_integrity != 0)
+               || sd->ciphering_disabled != !rrc->security.do_drb_ciphering)
+        why = "DRB integrity/ciphering";
+      else if (sd->sdap_header_ul != sdap_header || sd->sdap_header_dl != sdap_header)
+        why = "SDAP header";
+      for (int i = 0; i < n_kept && !why; i++)
+        if (kept[i].drb_id == m->drb_id)
+          why = "duplicate DRB ID";
+      bool all_fwd = true;
+      for (int q = 0; q < m->num_qfi && !why; q++) {
+        const xnap_qos_flow_tobe_setup_item_t *f = NULL;
+        for (int j = 0; j < pdu->num_qos; j++)
+          if (pdu->qos_list[j].qfi == m->qfi[q])
+            f = &pdu->qos_list[j];
+        if (!f)
+          why = "QoS flow not to be set up";
+        else
+          all_fwd &= f->dl_fwd_proposed;
+      }
+      if (why) {
+        LOG_I(NR_RRC, "Xn HO: source DRB %d (PDU session %d) not kept: %s\n", m->drb_id, pdu->pdusession_id, why);
+        continue;
+      }
+      nr_rrc_kept_drb_t *kd = &kept[n_kept++];
+      *kd = (nr_rrc_kept_drb_t){.drb_id = m->drb_id,
+                                .pdusession_id = pdu->pdusession_id,
+                                .sn_size = sd->sn_size,
+                                .num_qfi = m->num_qfi,
+                                .default_drb = sd->default_drb,
+                                /* lossless DL forwarding with PDCP SN status: RLC AM only */
+                                .dl_fwd = all_fwd && rlc_mode == XNAP_RLC_MODE_AM};
+      memcpy(kd->qfi, m->qfi, m->num_qfi);
+    }
+  }
+  return n_kept;
+}
+
 int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t *req)
 {
   nr_rrc_cell_container_t *cell = get_cell_by_cell_id(&rrc->cells, req->target_cgi.nrcell_id);
@@ -293,7 +383,6 @@ int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t
     pdu->pdusession_id         = xpdu->pdusession_id;
     pdu->pdu_session_type      = xpdu->pdu_session_type;
     pdu->n3_incoming           = xpdu->n3_incoming;
-    pdu->dl_forwarding_proposed = xpdu->dl_forwarding_proposed;
     if (xpdu->nssai)
       pdu->nssai = *xpdu->nssai;
 
@@ -317,7 +406,21 @@ int rrc_gNB_process_XNAP_HANDOVER_REQUEST(gNB_RRC_INST *rrc, xnap_handover_req_t
     }
   }
 
-  nr_rrc_add_bearers(rrc, UE, n_pdu, sessions);
+  nr_rrc_kept_drb_t kept[MAX_DRBS_PER_UE];
+  uint64_t src_drb_ids = 0;
+  int n_kept = xn_select_kept_drbs(rrc, &req->ue_context, kept, &src_drb_ids);
+  /* source DRBs not kept are released in the HO command and their IDs not reused for new DRBs */
+  uint64_t kept_ids = 0;
+  for (int i = 0; i < n_kept; i++)
+    kept_ids |= 1ULL << kept[i].drb_id;
+  for (int id = 1; id <= MAX_DRBS_PER_UE; id++) {
+    if (!(src_drb_ids & (1ULL << id)) || (kept_ids & (1ULL << id)))
+      continue;
+    LOG_I(NR_RRC, "UE %d: source DRB %d not kept, releasing it in the HO command\n", UE->rrc_ue_id, id);
+    target->src_drb_rel[target->n_src_drb_rel++] = id;
+  }
+
+  nr_rrc_add_bearers_keep_source(rrc, UE, n_pdu, sessions, kept, n_kept, src_drb_ids);
   free(sessions);
   trigger_bearer_setup(rrc, UE, UE->ambr.dl_br);
   return 0;
@@ -347,19 +450,20 @@ void rrc_gNB_send_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, byt
           admitted[idx].qos_list[j].qfi = qos->qos.qfi;
         }
       }
-      /* Per-DRB DL forwarding tunnels: advertise the target CU-UP DL forwarding
-       * endpoint allocated per DRB during E1AP Bearer Context Setup (TS 38.423
-       * DataForwardingResponseDRBItemList). The source gNB forwards DL data here
-       * until the UPF path switches after HandoverNotify. */
+      /* DataForwardingInfoFromTargetNGRANnode: the DL forwarding tunnel the target CU-UP
+       * allocated for each DRB accepted for forwarding (dataForwardingResponseDRBItemList),
+       * and the QoS flows of these DRBs (QoS Flows Accepted For Data Forwarding) */
       uint8_t nfwd = 0;
       FOR_EACH_SEQ_ARR (drb_t *, drb, &UE->drbs) {
         if (drb->pdusession_id != (int)p->param.pdusession_id || drb->dl_fwd_cuup_tnl.teid == 0)
           continue;
-        if (nfwd >= MAX_DRBS_PER_UE)
-          break;
         admitted[idx].drb_fwd_list[nfwd].drb_id = drb->drb_id;
         admitted[idx].drb_fwd_list[nfwd].dl_fwd_tnl = drb->dl_fwd_cuup_tnl;
         nfwd++;
+        FOR_EACH_SEQ_ARR (nr_rrc_qos_t *, qos, &p->param.qos) {
+          if (qos->drb_id == drb->drb_id)
+            admitted[idx].qos_fwd[admitted[idx].num_qos_fwd++] = qos->qos.qfi;
+        }
       }
       admitted[idx].num_drb_fwd = nfwd;
       idx++;
@@ -407,7 +511,7 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
       if (fwd->dl_fwd_tnl.teid == 0)
         continue;
       drb_t *drb = get_drb(&UE->drbs, fwd->drb_id);
-      if (!drb) {
+      if (!drb || drb->pdusession_id != adm->pdusession_id) {
         LOG_W(NR_RRC, "UE %d: HO ACK DL fwd for unknown DRB %d\n", UE->rrc_ue_id, fwd->drb_id);
         continue;
       }
@@ -417,11 +521,9 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
     }
   }
 
-  /* Send the HO Command (RRCReconfiguration) to the UE FIRST. This triggers the
-   * source DU to stop DL transmission to the UE (TransmissionActionIndicator
-   * Stop). Only after that do we arm the forwarding tunnel and drain the DL
-   * backlog (below), so we forward only genuinely-untransmitted SDUs and
-   * minimise duplication with what the source already put on the air (#6). */
+  /* HO Command to the UE via F1 UE CONTEXT MODIFICATION (Transmission Action Indicator
+   * stop). Its response triggers the E1 Bearer Context Modification carrying the PDCP SN
+   * Status Request and the DRB Data Forwarding Information (e1_request_pdcp_status()). */
   byte_array_t buffer = doRRCReconfiguration_from_HandoverCommand(msg->target2source);
   if (!buffer.buf || buffer.len == 0) {
     LOG_E(NR_RRC, "UE %d: failed to decode HandoverCommand from Xn HO Request Ack\n", UE->rrc_ue_id);
@@ -433,49 +535,6 @@ void rrc_gNB_process_XNAP_HANDOVER_REQ_ACK(gNB_RRC_INST *rrc, const xnap_handove
   LOG_A(NR_RRC, "Xn HO: sent RRCReconfiguration (HO Command) to UE %u/RNTI %04x\n",
         UE->rrc_ue_id, UE->rnti);
   free_byte_array(buffer);
-
-  /* Now arm the DL forwarding tunnel(s) and drain the backlog to the target.
-   * Build a per-PDU-session bearer-mod carrying the per-DRB forwarding tunnels
-   * (DRB_nGRAN_to_mod_t.dl_fwd_tnl). */
-  if (ue_associated_to_cuup(UE) && msg->num_pdu_admitted > 0) {
-    pdu_session_to_mod_t *fwd_sessions = calloc_or_fail(msg->num_pdu_admitted, sizeof(*fwd_sessions));
-    int num_fwd = 0;
-    for (int i = 0; i < msg->num_pdu_admitted; i++) {
-      const xnap_pdusession_admitted_item_t *adm = &msg->pdusession_admitted_list[i];
-      pdu_session_to_mod_t *sess = &fwd_sessions[num_fwd];
-      int nmod = 0;
-      for (int k = 0; k < adm->num_drb_fwd; k++) {
-        const xnap_drb_fwd_item_t *fwd = &adm->drb_fwd_list[k];
-        if (fwd->dl_fwd_tnl.teid == 0)
-          continue;
-        DRB_nGRAN_to_mod_t *drb_mod = &sess->DRBnGRanModList[nmod];
-        drb_mod->id = fwd->drb_id;
-        drb_mod->dl_fwd_tnl = calloc_or_fail(1, sizeof(*drb_mod->dl_fwd_tnl));
-        drb_mod->dl_fwd_tnl->teId = (int32_t)fwd->dl_fwd_tnl.teid;
-        memcpy(&drb_mod->dl_fwd_tnl->tlAddress, fwd->dl_fwd_tnl.addr.buffer, sizeof(in_addr_t));
-        nmod++;
-      }
-      if (nmod > 0) {
-        sess->sessionId = adm->pdusession_id;
-        sess->numDRB2Modify = nmod;
-        num_fwd++;
-      }
-    }
-    if (num_fwd > 0) {
-      e1ap_bearer_mod_req_t e1_req = {
-        .gNB_cu_cp_ue_id = UE->rrc_ue_id,
-        .gNB_cu_up_ue_id = UE->rrc_ue_id,
-        .numPDUSessionsMod = num_fwd,
-        .pduSessionMod = fwd_sessions,
-      };
-      sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
-      rrc->cucp_cuup.bearer_context_mod(assoc_id, &e1_req);
-    }
-    for (int i = 0; i < num_fwd; i++)
-      for (int j = 0; j < fwd_sessions[i].numDRB2Modify; j++)
-        free(fwd_sessions[i].DRBnGRanModList[j].dl_fwd_tnl);
-    free(fwd_sessions);
-  }
 }
 
 /** @brief Send SN Status Transfer (TS 38.423 §9.1.1.4) from source to target via Xn.
@@ -539,6 +598,8 @@ int rrc_gNB_process_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
   gNB_RRC_UE_t *UE = &ue_context_p->ue_context;
   LOG_I(NR_RRC, "[gNB %ld] UE %u: SN Status Transfer nb_drb=%u\n", instance, UE->rrc_ue_id, msg->ran_status.nb_drb);
 
+  rrc_drb_pdcp_status_t status[MAX_DRBS_PER_UE];
+  int n = 0;
   for (int i = 0; i < msg->ran_status.nb_drb; ++i) {
     const xnap_drb_status_t *s = &msg->ran_status.drb_status_list[i];
     LOG_I(NR_RRC,
@@ -548,13 +609,19 @@ int rrc_gNB_process_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
           s->ul_count.sn_len == XNAP_SN_LENGTH_18 ? "18-bit" : "12-bit",
           s->dl_count.pdcp_sn, s->dl_count.hfn,
           s->dl_count.sn_len == XNAP_SN_LENGTH_18 ? "18-bit" : "12-bit");
-    rrc_drb_pdcp_status_t status = {
+    /* the source COUNT applies only to a DRB kept with its source configuration */
+    const drb_t *drb = get_drb(&UE->drbs, s->drb_id);
+    if (!drb || !drb->xn_kept) {
+      LOG_W(NR_RRC, "UE %u: SN Status Transfer for DRB %d not kept from the source, ignored\n", UE->rrc_ue_id, s->drb_id);
+      continue;
+    }
+    status[n++] = (rrc_drb_pdcp_status_t){
       .drb_id   = s->drb_id,
       .ul_count = {.sn = s->ul_count.pdcp_sn, .hfn = s->ul_count.hfn},
       .dl_count = {.sn = s->dl_count.pdcp_sn, .hfn = s->dl_count.hfn},
     };
-    e1_notify_pdcp_status(rrc, UE, &status);
   }
+  e1_notify_pdcp_status(rrc, UE, n, status);
 
   return 0;
 }

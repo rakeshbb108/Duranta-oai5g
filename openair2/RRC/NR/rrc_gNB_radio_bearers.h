@@ -57,6 +57,27 @@ bool nr_rrc_remove_drb_by_id(seq_arr_t *drb_ptr, const int drb_id);
 /// @brief Add PDU Sessions and DRBs to UE context list
 void nr_rrc_add_bearers(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, int n, pdusession_t *sessions);
 
+/// @brief Xn HO target: a source DRB kept with its ID, PDCP SN size and QoS flows
+typedef struct {
+  int drb_id;
+  int pdusession_id;
+  int sn_size;
+  int num_qfi;
+  uint8_t qfi[MAX_QOS_FLOWS];
+  bool default_drb;
+  // DL data forwarding accepted for this DRB
+  bool dl_fwd;
+} nr_rrc_kept_drb_t;
+
+/// @brief Add PDU Sessions keeping the given source DRBs; new DRBs avoid IDs set in @param avoid_ids
+void nr_rrc_add_bearers_keep_source(gNB_RRC_INST *rrc,
+                                    gNB_RRC_UE_t *UE,
+                                    int n,
+                                    pdusession_t *sessions,
+                                    const nr_rrc_kept_drb_t *kept,
+                                    int n_kept,
+                                    uint64_t avoid_ids);
+
 /// @brief Find existing DRB that can accept a QoS flow based on resource type and multiplexing limits
 int nr_rrc_find_suitable_drb_for_qos(gNB_RRC_UE_t *UE,
                                      const int pdusession_id,

@@ -279,7 +279,8 @@ bool rm_pduSession(seq_arr_t *sessions, seq_arr_t *drbs, int pdusession_id)
 }
 
 /** @brief Add drb_t item in the UE context list for @param pdusession_id */
-drb_t *nr_rrc_add_drb(seq_arr_t *drb_ptr, int pdusession_id, nr_pdcp_configuration_t *pdcp)
+/* add a DRB with the lowest free ID not set in avoid_ids (bit n: DRB ID n) */
+static drb_t *add_drb(seq_arr_t *drb_ptr, int pdusession_id, const nr_pdcp_configuration_t *pdcp, uint64_t avoid_ids)
 {
   DevAssert(drb_ptr);
   DevAssert(pdcp != NULL);
@@ -290,7 +291,7 @@ drb_t *nr_rrc_add_drb(seq_arr_t *drb_ptr, int pdusession_id, nr_pdcp_configurati
 
   // First, try to find the lowest available ID (prefer smaller IDs)
   for (drb_id = 1; drb_id <= MAX_DRBS_PER_UE; drb_id++) {
-    if (get_drb(drb_ptr, drb_id) == NULL) {
+    if (get_drb(drb_ptr, drb_id) == NULL && !(avoid_ids & (1ULL << drb_id))) {
       break; // Found available ID
     }
   }
@@ -306,6 +307,11 @@ drb_t *nr_rrc_add_drb(seq_arr_t *drb_ptr, int pdusession_id, nr_pdcp_configurati
   drb_t *out = get_drb(drb_ptr, drb_id);
   DevAssert(out);
   return out;
+}
+
+drb_t *nr_rrc_add_drb(seq_arr_t *drb_ptr, int pdusession_id, nr_pdcp_configuration_t *pdcp)
+{
+  return add_drb(drb_ptr, pdusession_id, pdcp, 0);
 }
 
 static bool eq_drb_id(const void *vval, const void *vit)
@@ -608,7 +614,11 @@ int nr_rrc_find_suitable_drb_for_qos(gNB_RRC_UE_t *UE,
  *  @note TS 23.501 §5.7.1.5: AN binds QoS Flows to AN resources (DRBs). No strict 1:1
  *  relation between QoS Flows and DRBs is required (reuse/multiplexing is allowed).
  *  @note qos->drb_id contains the assigned DRB ID */
-bool nr_rrc_assign_drb_to_qos_flow(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const pdusession_t *session, nr_rrc_qos_t *qos)
+static bool assign_drb_to_qos_flow(gNB_RRC_INST *rrc,
+                                   gNB_RRC_UE_t *UE,
+                                   const pdusession_t *session,
+                                   nr_rrc_qos_t *qos,
+                                   uint64_t avoid_ids)
 {
   DevAssert(rrc);
   DevAssert(UE);
@@ -624,7 +634,7 @@ bool nr_rrc_assign_drb_to_qos_flow(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const pd
   bool is_new_drb = drb_id == -1;
   if (drb_id == -1) {
     // Create a new DRB
-    drb_t *rrc_drb = nr_rrc_add_drb(&UE->drbs, session->pdusession_id, &rrc->pdcp_config);
+    drb_t *rrc_drb = add_drb(&UE->drbs, session->pdusession_id, &rrc->pdcp_config, avoid_ids);
     DevAssert(rrc_drb);
     // Store the assigned DRB ID
     drb_id = rrc_drb->drb_id;
@@ -647,8 +657,26 @@ bool nr_rrc_assign_drb_to_qos_flow(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const pd
   return is_new_drb;
 }
 
+bool nr_rrc_assign_drb_to_qos_flow(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, const pdusession_t *session, nr_rrc_qos_t *qos)
+{
+  return assign_drb_to_qos_flow(rrc, UE, session, qos, 0);
+}
+
 /** @brief Add PDU Sessions and DRBs to UE context list. For each QoS flow in the setup list, adds a DRB */
 void nr_rrc_add_bearers(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, int n, pdusession_t *sessions)
+{
+  nr_rrc_add_bearers_keep_source(rrc, UE, n, sessions, NULL, 0, 0);
+}
+
+/** @brief As nr_rrc_add_bearers(), but first keep the given source DRBs (Xn HO target): same
+ *  DRB ID, PDCP SN size and QoS flows. Remaining flows get new DRBs, avoiding avoid_ids. */
+void nr_rrc_add_bearers_keep_source(gNB_RRC_INST *rrc,
+                                    gNB_RRC_UE_t *UE,
+                                    int n,
+                                    pdusession_t *sessions,
+                                    const nr_rrc_kept_drb_t *kept,
+                                    int n_kept,
+                                    uint64_t avoid_ids)
 {
   for (int i = 0; i < n; i++) {
     bool default_set = false;
@@ -661,9 +689,38 @@ void nr_rrc_add_bearers(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, int n, pdusession_t
     }
     pdusession_t *session = &pduSession->param;
 
+    for (const nr_rrc_kept_drb_t *k = kept; k < kept + n_kept; k++) {
+      if (k->pdusession_id != session->pdusession_id)
+        continue;
+      if (get_drb(&UE->drbs, k->drb_id)) {
+        LOG_E(NR_RRC, "UE %d: cannot keep source DRB %d, ID already in use\n", UE->rrc_ue_id, k->drb_id);
+        continue;
+      }
+      nr_pdcp_configuration_t pdcp = rrc->pdcp_config;
+      pdcp.drb.sn_size = k->sn_size;
+      drb_t drb = {.drb_id = k->drb_id,
+                   .pdusession_id = k->pdusession_id,
+                   .pdcp_config = pdcp,
+                   .xn_kept = true,
+                   .xn_fwd = k->dl_fwd};
+      seq_arr_push_back(&UE->drbs, &drb, sizeof(drb));
+      for (int q = 0; q < k->num_qfi; q++) {
+        nr_rrc_qos_t *qos = find_qos(&session->qos, k->qfi[q]);
+        DevAssert(qos);
+        qos->drb_id = k->drb_id;
+      }
+      if (k->default_drb) {
+        session->sdap_config.default_drb = k->drb_id;
+        default_set = true;
+      }
+      LOG_I(NR_RRC, "UE %d: kept source DRB %d (PDU session %d, %d QoS flows, DL forwarding %s)\n",
+            UE->rrc_ue_id, k->drb_id, k->pdusession_id, k->num_qfi, k->dl_fwd ? "yes" : "no");
+    }
+
     // Intelligent QoS to DRB mapping based on 3GPP TS 23.501
     FOR_EACH_SEQ_ARR(nr_rrc_qos_t *, qos, &session->qos) {
-      nr_rrc_assign_drb_to_qos_flow(rrc, UE, session, qos);
+      if (qos->drb_id == 0)
+        assign_drb_to_qos_flow(rrc, UE, session, qos, avoid_ids);
       /* TS 23.501 §5.7.2.7: the QoS Flow associated with the default QoS rule should be a Non-GBR QoS Flow
        * from the standardized value range. Therefore, we prefer the DRB mapped from the first Non-GBR QoS flow here. */
       const uint16_t five_qi = get_qos_fiveqi(&qos->qos);

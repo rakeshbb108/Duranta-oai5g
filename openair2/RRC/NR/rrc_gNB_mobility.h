@@ -80,6 +80,9 @@ typedef struct nr_ho_target_cu {
   /// Xn only: opaque token from XNAP_HANDOVER_REQ, echoed once in HANDOVER_REQ_ACK or
   /// HANDOVER_PREP_FAILURE; 0 once consumed
   uint32_t xn_token;
+  /// Xn only: source DRBs not kept, to release in the HO command
+  int n_src_drb_rel;
+  int src_drb_rel[MAX_DRBS_PER_UE];
 } nr_ho_target_cu_t;
 
 typedef struct nr_handover_context_s {
