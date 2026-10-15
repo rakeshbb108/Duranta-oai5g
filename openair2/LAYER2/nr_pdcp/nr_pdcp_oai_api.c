@@ -943,6 +943,14 @@ bool nr_pdcp_data_req_drb(protocol_ctxt_t *ctxt_pP,
     return 0;
   }
 
+  if (rb->forward_sdu) {
+    /* Xn HO source, DL frozen: fresh SDU to the target without SN, sent under the
+     * lock so that it cannot overtake the backlog forwarded with SN */
+    rb->forward_sdu(rb->forward_sdu_data, ue_id, rb_id, (char *)sdu_buffer, sdu_buffer_size, -1, rb->sn_size);
+    nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+    return 1;
+  }
+
   int max_size = nr_max_pdcp_pdu_size(sdu_buffer_size);
   char pdu_buf[max_size];
   int pdu_size = rb->process_sdu(rb, (char *)sdu_buffer, sdu_buffer_size, muiP, pdu_buf, max_size);
@@ -1075,8 +1083,24 @@ void nr_pdcp_get_drb_count_values(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_count_t 
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
 }
 
+/** @brief Xn HO source: freeze DL of a DRB and start forwarding to the target (see
+ *  nr_pdcp_entity_start_dl_forwarding()). Read the SN status after this call: DL COUNT
+ *  is then the first COUNT the target assigns.
+ *  @return false if the DRB does not exist or already forwards */
+bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_forward_sdu_t forward_sdu, void *data)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  bool ok = rb != NULL && rb->forward_sdu == NULL;
+  if (ok)
+    nr_pdcp_entity_start_dl_forwarding(rb, ue_id, forward_sdu, data);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+  return ok;
+}
+
 /** @brief Mark a DL SDU (identified by its PDCP COUNT) as confirmed delivered,
- *  pruning it (and anything older) from the Xn HO forwarding shadow ring. */
+ *  removing it from the Xn HO forwarding shadow ring. */
 void nr_pdcp_entity_ack_sdu(ue_id_t ue_id, rb_id_t rb_id, uint32_t count)
 {
   /* No-op when PDCP isn't colocated in this process (e.g. split DU-only,

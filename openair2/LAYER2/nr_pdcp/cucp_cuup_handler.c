@@ -413,6 +413,48 @@ static void release_f1_drbs(uint32_t ue_id, int pdusession_id)
 
 static void e1_remove_xnu_tunnel(uint32_t ue_id, int drb_id);
 
+/* Xn HO source: G-PDU toward the target on the DRB's DL forwarding tunnel */
+static void xnu_forward_sdu(void *data, ue_id_t ue_id, int rb_id, const char *buf, int size, int sn, int sn_size)
+{
+  gtpv1uSendDirectWithPdcpSn(get_xnu_gtp_instance(), ue_id, rb_id, (uint8_t *)buf, size, sn, sn_size);
+}
+
+static bool xnu_fwd_tunnel_rx(protocol_ctxt_t *ctxt_pP,
+                              const srb_flag_t srb_flagP,
+                              const rb_id_t rb_id,
+                              const mui_t muiP,
+                              const confirm_t confirmP,
+                              const sdu_size_t sdu_buffer_size,
+                              unsigned char *const sdu_buffer,
+                              const pdcp_transmission_mode_t mode,
+                              const uint32_t *const sourceL2Id,
+                              const uint32_t *const destinationL2Id)
+{
+  LOG_W(GTPU, "UE %lx DRB %ld: G-PDU received on a source-side Xn-U forwarding tunnel, dropped\n", ctxt_pP->rntiMaybeUEid, rb_id);
+  return false;
+}
+
+/** @brief Xn HO source: on the DRB Data Forwarding Information (target DL forwarding
+ *  tunnel), create the outgoing Xn-U tunnel, freeze the DRB and forward its backlog.
+ *  Must precede the PDCP SN status read of the same Bearer Context Modification. */
+static void e1_start_xnu_forwarding(uint32_t ue_id, int drb_id, const UP_TL_information_t *tnl)
+{
+  instance_t xnuinst = get_xnu_gtp_instance();
+  if (xnuinst < 0) {
+    LOG_E(E1AP, "UE %u DRB %d: DL forwarding requested but no Xn-U GTP-U instance\n", ue_id, drb_id);
+    return;
+  }
+  transport_layer_addr_t addr = {.length = 32};
+  memcpy(addr.buffer, &tnl->tlAddress, sizeof(in_addr_t));
+  newGtpuCreateTunnel(xnuinst, ue_id, drb_id, drb_id, tnl->teId, addr, xnu_fwd_tunnel_rx, NULL, NULL);
+  if (!nr_pdcp_start_dl_forwarding(ue_id, drb_id, xnu_forward_sdu, NULL)) {
+    LOG_E(E1AP, "UE %u DRB %d: cannot start DL forwarding\n", ue_id, drb_id);
+    e1_remove_xnu_tunnel(ue_id, drb_id);
+    return;
+  }
+  LOG_I(E1AP, "UE %u DRB %d: DL forwarding to TEID 0x%x\n", ue_id, drb_id, tnl->teId);
+}
+
 /** @brief Release UP resources for one PDU session (N3, F1-U, SDAP) */
 static void cuup_release_pdu_session_up(uint32_t ue_id, int pdusession_id)
 {
@@ -541,6 +583,11 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
                                 false,
                                 &security_parameters);
       }
+
+      // DRB Data Forwarding Information (Xn HO source): before the SN status, which then
+      // reports the frozen DL COUNT
+      if (to_modif->dl_fwd_tnl)
+        e1_start_xnu_forwarding(req->gNB_cu_up_ue_id, to_modif->id, to_modif->dl_fwd_tnl);
 
       // PDCP Status Information requested
       if (to_modif->pdcp_sn_status_requested) {

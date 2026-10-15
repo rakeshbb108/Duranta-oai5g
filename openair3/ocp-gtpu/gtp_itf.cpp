@@ -464,6 +464,30 @@ void gtpv1uSendDirectWithNRUSeqNum(instance_t instance,
   _gtpv1uSendDirect(instance, ue_id, bearer_id, NO_QFI, buf, len, false, false, nru_seqnum);
 }
 
+/** @brief Send a G-PDU carrying a forwarded PDCP SDU (Xn HO DL data forwarding).
+ *  @param sn PDCP SN of the SDU, sent in the PDCP PDU Number extension header
+ *  (Long PDCP PDU Number for 18-bit SNs, TS 29.281); sn < 0: SDU without SN */
+void gtpv1uSendDirectWithPdcpSn(instance_t instance, ue_id_t ue_id, int bearer_id, uint8_t *buf, size_t len, int sn, int sn_size)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  getInstRetVoid(compatInst(instance));
+  getUeRetVoid(inst, ue_id);
+  auto ptr2 = ptrUe->second.bearers.find(bearer_id);
+  if (ptr2 == ptrUe->second.bearers.end()) {
+    LOG_E(GTPU, "[%ld] GTP-U instance: sending a packet to a non existant UE:RAB: %lx/%x\n", instance, ue_id, bearer_id);
+    pthread_mutex_unlock(&globGtp.gtp_lock);
+    return;
+  }
+  gtpv1u_bearer_t bearer = ptr2->second;
+  pthread_mutex_unlock(&globGtp.gtp_lock);
+
+  gtpu_extension_header_t ext = {
+    .type = sn_size == 18 ? GTPU_EXT_LONG_PDCP_PDU_NUMBER : GTPU_EXT_PDCP_PDU_NUMBER,
+    .pdcp_pdu_number = {.pdcp_pdu_number = (uint32_t)sn},
+  };
+  gtpv1uCreateAndSendMsg(&bearer, GTP_GPDU, buf, len, false, false, sn >= 0 ? &ext : NULL, sn >= 0 ? 1 : 0);
+}
+
 /* Build a DL DATA DELIVERY STATUS extension. highest_tx_sn / highest_delivered_sn
  * < 0 mean "not present" (indicator cleared). */
 static void fillDlDeliveryStatusReport(gtpu_extension_header_t *ext, uint32_t desired_buffer_size, int highest_tx_sn, int highest_delivered_sn)

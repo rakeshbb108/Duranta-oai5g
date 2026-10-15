@@ -70,8 +70,24 @@ void nr_pdcp_shadow_ring_push(nr_pdcp_shadow_ring_t *ring, const char *buffer, i
 
 void nr_pdcp_shadow_ring_ack(nr_pdcp_shadow_ring_t *ring, uint32_t count)
 {
-  while (ring->head != NULL && ring->head->count <= count)
-    shadow_ring_pop_head(ring);
+  /* RLC AM confirms SDUs individually and possibly out of order: a later SDU
+   * acknowledged does not mean an earlier one was, so remove only this COUNT */
+  nr_pdcp_shadow_sdu_t *prev = NULL;
+  for (nr_pdcp_shadow_sdu_t *cur = ring->head; cur != NULL; prev = cur, cur = cur->next) {
+    if (cur->count != count)
+      continue;
+    if (prev == NULL) {
+      shadow_ring_pop_head(ring);
+      return;
+    }
+    prev->next = cur->next;
+    if (ring->tail == cur)
+      ring->tail = prev;
+    ring->count--;
+    ring->byte_count -= cur->size;
+    free(cur);
+    return;
+  }
 }
 
 void nr_pdcp_shadow_ring_sweep_expired(nr_pdcp_shadow_ring_t *ring, uint64_t now, int discard_timer)
@@ -95,6 +111,38 @@ nr_pdcp_shadow_sdu_t *nr_pdcp_shadow_ring_drain(nr_pdcp_shadow_ring_t *ring)
   ring->count = 0;
   ring->byte_count = 0;
   return list;
+}
+
+void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id, nr_pdcp_forward_sdu_t forward_sdu, void *data)
+{
+  DevAssert(forward_sdu);
+  DevAssert(entity->forward_sdu == NULL);
+  entity->forward_sdu = forward_sdu;
+  entity->forward_sdu_data = data;
+  if (entity->shadow_ring == NULL)
+    return;
+  nr_pdcp_shadow_ring_t *ring = entity->shadow_ring;
+  if (ring->dropped_oldest > 0)
+    LOG_W(PDCP,
+          "UE %lx DRB %d: %u unacknowledged SDUs evicted (backlog cap) before forwarding\n",
+          ue_id,
+          entity->rb_id,
+          ring->dropped_oldest);
+  int n = 0;
+  nr_pdcp_shadow_sdu_t *sdu = nr_pdcp_shadow_ring_drain(ring);
+  while (sdu != NULL) {
+    nr_pdcp_shadow_sdu_t *next = sdu->next;
+    forward_sdu(data, ue_id, entity->rb_id, sdu->data, sdu->size, sdu->count & entity->sn_max, entity->sn_size);
+    free(sdu);
+    sdu = next;
+    n++;
+  }
+  LOG_I(PDCP,
+        "UE %lx DRB %d: DL frozen at TX_NEXT %u, forwarded %d unacknowledged SDUs\n",
+        ue_id,
+        entity->rb_id,
+        entity->tx_next,
+        n);
 }
 
 void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring)

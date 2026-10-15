@@ -144,6 +144,7 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
 
   void gtpv1uSendDirect(instance_t instance, ue_id_t ue_id, int bearer_id, uint8_t *buf, size_t len, bool seqNumFlag, bool npduNumFlag);
   void gtpv1uSendDirectWithQFI(instance_t instance, ue_id_t ue_id, int bearer_id, int qfi, uint8_t *buf, size_t len);
+  void gtpv1uSendDirectWithPdcpSn(instance_t instance, ue_id_t ue_id, int bearer_id, uint8_t *buf, size_t len, int sn, int sn_size);
 
   void gtpv1uSendDirectWithNRUSeqNum(instance_t instance,
                                      ue_id_t ue_id,

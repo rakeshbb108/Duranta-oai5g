@@ -60,6 +60,9 @@ typedef struct nr_pdcp_shadow_sdu_s {
   char data[]; /* plaintext SDU bytes */
 } nr_pdcp_shadow_sdu_t;
 
+/* Xn HO source: hands a DL PDCP SDU to the target; sn < 0 if the SDU has no SN */
+typedef void (*nr_pdcp_forward_sdu_t)(void *data, ue_id_t ue_id, int rb_id, const char *buf, int size, int sn, int sn_size);
+
 typedef struct nr_pdcp_shadow_ring_s {
   nr_pdcp_shadow_sdu_t *head; /* oldest, evicted first when over cap */
   nr_pdcp_shadow_sdu_t *tail; /* newest */
@@ -71,7 +74,7 @@ typedef struct nr_pdcp_shadow_ring_s {
 
 nr_pdcp_shadow_ring_t *nr_pdcp_shadow_ring_new(void);
 void nr_pdcp_shadow_ring_push(nr_pdcp_shadow_ring_t *ring, const char *buffer, int size, uint32_t count, int qfi, uint64_t now);
-/* evicts count and everything older */
+/* evicts the entry with this exact COUNT, if present */
 void nr_pdcp_shadow_ring_ack(nr_pdcp_shadow_ring_t *ring, uint32_t count);
 /* evicts entries whose discardTimer has expired (TS 38.323 5.3); no-op if discard_timer < 0 (infinity) */
 void nr_pdcp_shadow_ring_sweep_expired(nr_pdcp_shadow_ring_t *ring, uint64_t now, int discard_timer);
@@ -217,7 +220,17 @@ typedef struct nr_pdcp_entity_s {
    * SDUs with their original COUNT. NULL except for gNB DRB entities. */
   nr_pdcp_shadow_ring_t *shadow_ring;
 
+  /* Xn HO source: non-NULL once DL forwarding started. The entity is frozen: no
+   * new DL SN is assigned and every DL SDU goes to the target through this. */
+  nr_pdcp_forward_sdu_t forward_sdu;
+  void *forward_sdu_data;
+
 } nr_pdcp_entity_t;
+
+/* Xn HO source: freeze DL and forward the backlog. Every SDU still in the shadow
+ * ring is passed to forward_sdu with its PDCP SN, in ascending COUNT order; later
+ * DL SDUs are to be passed to forward_sdu without SN by the caller of process_sdu. */
+void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id, nr_pdcp_forward_sdu_t forward_sdu, void *data);
 
 /* Sibling to entity->process_sdu() that writes/ciphers using an explicit COUNT
  * instead of entity->tx_next, and does not advance tx_next. Used at the target
