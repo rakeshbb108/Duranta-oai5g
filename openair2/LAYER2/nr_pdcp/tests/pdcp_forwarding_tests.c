@@ -255,6 +255,9 @@ static void test_source_guard(void)
   nr_pdcp_entity_t *e = new_drb(18);
   nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
   e->forward_start = 1000;
+  /* tick read before the start was stamped */
+  e->set_time(e, 999);
+  CHECK(!e->forward_timed_out);
   e->set_time(e, 1000 + NR_PDCP_FWD_SOURCE_GUARD_MS - 1);
   CHECK(!e->forward_timed_out);
   e->set_time(e, 1000 + NR_PDCP_FWD_SOURCE_GUARD_MS);
@@ -280,6 +283,8 @@ static void test_target_guard_no_sn_status(void)
   tx_n = 0;
   nr_pdcp_entity_recv_forwarded_sdu(e, 1, &f, 1, 7);
   CHECK(nr_pdcp_entity_hold_ngu_sdu(e, 1, &n, 1));
+  e->set_time(e, 4999);
+  CHECK(tx_n == 0 && e->fwd_hold && e->ngu_hold);
   e->set_time(e, 5000 + NR_PDCP_FWD_TARGET_GUARD_MS - 1);
   CHECK(tx_n == 0 && e->fwd_hold && e->ngu_hold);
   e->set_time(e, 5000 + NR_PDCP_FWD_TARGET_GUARD_MS);

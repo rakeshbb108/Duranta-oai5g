@@ -279,17 +279,24 @@ void nr_pdcp_entity_forwarding_end_received(nr_pdcp_entity_t *entity, ue_id_t ue
     release_ngu(entity, ue_id);
 }
 
+/* true if at least ms elapsed since start; a tick taken before start (the timer thread
+ * reads the time before it gets the PDCP lock) is not "after" it */
+static bool elapsed(uint64_t now, uint64_t start, uint64_t ms)
+{
+  return now >= start && now - start >= ms;
+}
+
 void nr_pdcp_entity_check_forwarding_guards(nr_pdcp_entity_t *entity, uint64_t now)
 {
   if (entity->forward_sdu && !entity->forward_ended && !entity->forward_timed_out
-      && now - entity->forward_start >= NR_PDCP_FWD_SOURCE_GUARD_MS) {
+      && elapsed(now, entity->forward_start, NR_PDCP_FWD_SOURCE_GUARD_MS)) {
     LOG_W(PDCP,
           "DRB %d: no End Marker %d ms after the DL freeze, ending forwarding\n",
           entity->rb_id,
           NR_PDCP_FWD_SOURCE_GUARD_MS);
     entity->forward_timed_out = true;
   }
-  if ((entity->fwd_hold || entity->ngu_hold) && now - entity->hold_start >= NR_PDCP_FWD_TARGET_GUARD_MS) {
+  if ((entity->fwd_hold || entity->ngu_hold) && elapsed(now, entity->hold_start, NR_PDCP_FWD_TARGET_GUARD_MS)) {
     if (entity->fwd_hold) {
       LOG_W(PDCP,
             "UE %lx DRB %d: no SN status %d ms after setup, dropping %d held forwarded SDUs\n",
