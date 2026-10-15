@@ -139,44 +139,6 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
                                               in_addr_t newOutgoingAddr,
                                               teid_t newOutgoingTeid);
 
-  /** @brief Set a DL forwarding tunnel on an existing GTP-U tunnel (Xn HO).
-   *  When set (fwdTeid != 0), all incoming DL packets on the tunnel are also
-   *  forwarded to the target CU-UP at fwdAddr:fwdTeid (TS 38.424 Xn-U).
-   *  bearer_id is the PDU session ID for N3 tunnels. */
-  void GtpuSetDLForwardingTunnel(instance_t instance,
-                                 ue_id_t ue_id,
-                                 int bearer_id,
-                                 in_addr_t fwdAddr,
-                                 teid_t fwdTeid);
-
-  /** @brief Forward one DL SDU to a UE's DL forwarding tunnel (Xn HO). When
-   *  pdcp_sn >= 0 the SDU is a buffered backlog SDU and is tagged with its
-   *  original PDCP SN via the PDCP PDU Number extension header (TS 29.281
-   *  5.2.2.2 short / 5.2.2.2A long, selected by long_sn); when pdcp_sn < 0 it is
-   *  fresh data forwarded without an SN. Subject to TS 38.425 DDDS flow-control
-   *  credit. Returns false (no-op) if no forwarding tunnel is armed for
-   *  bearer_id or the flow-control credit is exhausted. */
-  bool GtpuForwardDlSduToFwdTunnel(instance_t instance,
-                                   ue_id_t ue_id,
-                                   int bearer_id,
-                                   int64_t pdcp_sn,
-                                   bool long_sn,
-                                   int qfi,
-                                   uint8_t *buf,
-                                   size_t len);
-
-  /** @brief Arm the DDDS return channel (Xn HO target side): where to send DL
-   *  DATA DELIVERY STATUS frames back to the source. returnTeid == 0 disables
-   *  DDDS reporting on this tunnel. Source address is learned from the recvfrom
-   *  of the first forwarded packet. */
-  void GtpuSetDDDSReturnTunnel(instance_t instance, ue_id_t ue_id, int bearer_id, teid_t returnTeid);
-
-  /** @brief Periodic TS 38.425 DDDS emit for HO forwarding flow control (target
-   *  side). Call from a ~ms periodic context OUTSIDE any PDCP/RLC lock; emits at
-   *  most every ~10 ms per armed forwarding-receive tunnel so a stopped source
-   *  resumes. now_ms is a monotonic millisecond clock. */
-  void GtpuDDDSPeriodic(uint64_t now_ms);
-
   int newGtpuDeleteOneTunnel(instance_t instance, ue_id_t ue_id, int rb_id);
   int newGtpuDeleteAllTunnels(instance_t instance, ue_id_t ue_id);
 

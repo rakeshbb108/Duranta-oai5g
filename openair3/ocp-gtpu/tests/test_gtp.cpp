@@ -571,6 +571,28 @@ TEST(gtp, error_indication_encode)
   EXPECT_EQ(memcmp(ie, ie_rt, encoded), 0);
 }
 
+/* TS 29.281 5.2.2.2: PDCP PDU Number, 15-bit field, 4-octet extension */
+TEST(gtp, pdcp_pdu_number_encode)
+{
+  gtpu_extension_header_t ext = {.type = GTPU_EXT_PDCP_PDU_NUMBER, .pdcp_pdu_number = {.pdcp_pdu_number = 0xabc}};
+  uint8_t out[16] = {0};
+  ASSERT_EQ(serialize_extension(&ext, GTPU_EXT_NONE, out, sizeof(out)), 4);
+  const uint8_t exp[4] = {0x01, 0x0a, 0xbc, 0x00};
+  EXPECT_EQ(memcmp(out, exp, sizeof(exp)), 0);
+  EXPECT_EQ(serialize_gtpu_extension_type(GTPU_EXT_PDCP_PDU_NUMBER), 0xc0);
+}
+
+/* TS 29.281 5.2.2.2A: Long PDCP PDU Number, 18-bit field, 8-octet extension */
+TEST(gtp, long_pdcp_pdu_number_encode)
+{
+  gtpu_extension_header_t ext = {.type = GTPU_EXT_LONG_PDCP_PDU_NUMBER, .pdcp_pdu_number = {.pdcp_pdu_number = 0x3abcd}};
+  uint8_t out[16] = {0};
+  ASSERT_EQ(serialize_extension(&ext, GTPU_EXT_NONE, out, sizeof(out)), 8);
+  const uint8_t exp[8] = {0x02, 0x03, 0xab, 0xcd, 0x00, 0x00, 0x00, 0x00};
+  EXPECT_EQ(memcmp(out, exp, sizeof(exp)), 0);
+  EXPECT_EQ(serialize_gtpu_extension_type(GTPU_EXT_LONG_PDCP_PDU_NUMBER), 0x82);
+}
+
 /* ideas for tests:
  * - share IP addresses among two instances (e.g., F1-U/NG-U on same IP/port)
  * - support of IPv6

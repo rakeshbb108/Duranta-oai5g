@@ -172,9 +172,8 @@ static UP_TL_information_t n3_gtpu_create(const gtpv1u_gnb_create_tunnel_req_t *
 /* Allocate a GTP-U tunnel on the dedicated Xn-U interface for per-DRB DL
  * forwarding (TS 38.423 DataForwardingResponseDRBItem). Xn-U has its own
  * instance and key space, so the DRB id is used as the tunnel key
- * (incoming_rb_id/outgoing_bearer_id). The tunnel's pdusession_id is kept as
- * the real PDU session id so the target's SDAP QFI-demux on the forwarded data
- * (sdap_data_req / nr_pdcp_data_req_drb_with_sn) resolves the right entity. */
+ * (incoming_rb_id/outgoing_bearer_id). The tunnel's pdusession_id is the real
+ * PDU session id. */
 static UP_TL_information_t xn_gtpu_create(uint32_t ue_id, int drb_id, int pdusession_id)
 {
   instance_t xnuinst = get_xnu_gtp_instance();
@@ -338,15 +337,6 @@ void e1_bearer_context_setup(const e1ap_bearer_setup_req_t *req)
         *resp_drb->dl_fwd_tnl = fwd_tl_info;
         LOG_I(E1AP, "UE %d: DL fwd tunnel for DRB %ld: TEID 0x%x\n",
               cu_up_ue_id, req_drb->id, fwd_tl_info.teId);
-        /* TS 38.425 DDDS: if the source advertised its DL NG-U return endpoint,
-         * arm the reverse channel so the target flow-controls the source's
-         * forwarding. The return address is captured from the recvfrom of the
-         * first forwarded packet; only the TEID needs signalling. */
-        if (req_pdu->dl_fwd_return_tnl.teid != 0) {
-          instance_t xnuinst = get_xnu_gtp_instance();
-          if (xnuinst >= 0)
-            GtpuSetDDDSReturnTunnel(xnuinst, cu_up_ue_id, req_drb->id, req_pdu->dl_fwd_return_tnl.teid);
-        }
       }
     }
 
@@ -598,38 +588,6 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
     for (int j = 0; j < req_pdu_mod->n_drb_to_remove; j++) {
       const int drb_id = req_pdu_mod->drbs_to_remove[j].id;
       release_drb_resources(req->gNB_cu_up_ue_id, drb_id);
-    }
-
-    /* DL data forwarding (Xn HO): the target now signals a per-DRB DL forwarding
-     * tunnel (TS 38.423 DataForwardingResponseDRBItem). In this (monolithic)
-     * CU-UP the source forwards via its per-PDU-session N3 tunnel and the target
-     * QFI-demuxes incoming forwarded data to the right DRB, so we arm the N3
-     * tunnel with the session's forwarding endpoint (all DRBs of a session share
-     * the target CU-UP address). */
-    const UP_TL_information_t *sess_fwd = NULL;
-    for (int j = 0; j < req_pdu_mod->numDRB2Modify; j++) {
-      if (req_pdu_mod->DRBnGRanModList[j].dl_fwd_tnl) {
-        sess_fwd = req_pdu_mod->DRBnGRanModList[j].dl_fwd_tnl;
-        break;
-      }
-    }
-    if (sess_fwd) {
-      instance_t n3inst = get_n3_gtp_instance();
-      if (n3inst >= 0) {
-        GtpuSetDLForwardingTunnel(n3inst,
-                                  req->gNB_cu_up_ue_id,
-                                  (int)req_pdu_mod->sessionId,
-                                  sess_fwd->tlAddress,
-                                  (teid_t)sess_fwd->teId);
-        LOG_I(E1AP,
-              "UE %u: PDU session %ld DL forwarding tunnel TEID 0x%x\n",
-              req->gNB_cu_up_ue_id,
-              req_pdu_mod->sessionId,
-              sess_fwd->teId);
-        /* forward the buffered-but-not-yet-transmitted DL backlog now, before
-         * fresh N3 arrivals start being forwarded on this same tunnel */
-        nr_pdcp_drain_and_forward_pending_sdus(n3inst, req->gNB_cu_up_ue_id, (int)req_pdu_mod->sessionId);
-      }
     }
   }
 

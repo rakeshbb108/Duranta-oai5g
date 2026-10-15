@@ -97,34 +97,6 @@ nr_pdcp_shadow_sdu_t *nr_pdcp_shadow_ring_drain(nr_pdcp_shadow_ring_t *ring)
   return list;
 }
 
-void nr_pdcp_shadow_ring_requeue_front(nr_pdcp_shadow_ring_t *ring, nr_pdcp_shadow_sdu_t *list)
-{
-  if (list == NULL)
-    return;
-  /* find tail of the list being requeued and count its entries/bytes */
-  nr_pdcp_shadow_sdu_t *tail = list;
-  int n = 1;
-  int bytes = list->size;
-  while (tail->next != NULL) {
-    tail = tail->next;
-    n++;
-    bytes += tail->size;
-  }
-  /* prepend before the current head (the requeued SDUs have lower COUNT) */
-  tail->next = ring->head;
-  ring->head = list;
-  if (ring->tail == NULL)
-    ring->tail = tail;
-  ring->count += n;
-  ring->byte_count += bytes;
-  /* enforce caps (evict newest-at-tail would break order; evict oldest head) */
-  while (ring->head != NULL
-         && (ring->count > NR_PDCP_SHADOW_RING_CAP_COUNT || ring->byte_count > NR_PDCP_SHADOW_RING_CAP_BYTES)) {
-    shadow_ring_pop_head(ring);
-    ring->dropped_oldest++;
-  }
-}
-
 void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring)
 {
   nr_pdcp_shadow_sdu_t *cur = ring->head;
@@ -735,93 +707,62 @@ static void nr_pdcp_entity_get_stats(nr_pdcp_entity_t *entity,
   *out = entity->stats;
 }
 
-/** @note: this function applies to the gNB only */
+/** @brief DL COUNT of TS 38.413/38.423 SN status transfer: COUNT to assign to
+ *  the next DL SDU not having an SN yet (TX_NEXT). gNB only. */
 static nr_pdcp_count_t nr_pdcp_entity_get_count_dl(nr_pdcp_entity_t *entity)
 {
-  nr_pdcp_count_t count = {0};
-  const int sn_bits = entity->sn_size;
-  const uint32_t sn_mask = entity->sn_max;
-  count.hfn = entity->rx_deliv >> sn_bits;
-  count.sn = entity->rx_deliv & sn_mask;
+  nr_pdcp_count_t count = {
+    .hfn = entity->tx_next >> entity->sn_size,
+    .sn = entity->tx_next & entity->sn_max,
+  };
   return count;
 }
 
-/** @note: this function applies to the gNB only */
+/** @brief UL COUNT of TS 38.413/38.423 SN status transfer: COUNT of the first
+ *  missing UL SDU (RX_DELIV). gNB only. */
 static nr_pdcp_count_t nr_pdcp_entity_get_count_ul(nr_pdcp_entity_t *entity)
 {
-  nr_pdcp_count_t count = {0};
-  const int sn_bits = entity->sn_size;
-  const uint32_t sn_mask = entity->sn_max;
-  count.hfn = entity->tx_next >> sn_bits;
-  count.sn = entity->tx_next & sn_mask;
+  nr_pdcp_count_t count = {
+    .hfn = entity->rx_deliv >> entity->sn_size,
+    .sn = entity->rx_deliv & entity->sn_max,
+  };
   return count;
 }
 
-/** @note: this function applies to the gNB only */
-static void nr_pdcp_entity_set_count_dl(nr_pdcp_entity_t *entity, nr_pdcp_count_t pdcp_count, int sn_size)
+static uint32_t pdcp_count_compose(nr_pdcp_count_t pdcp_count, int sn_size)
 {
-  // SN length in bits
   const uint32_t sn_mask = (1 << sn_size) - 1;
-
-  // Compose COUNT values for tx_next (DL) and rx_next (UL)
-  uint32_t count = (pdcp_count.hfn << sn_size) | (pdcp_count.sn & sn_mask);
-
-  // Apply the COUNT values
-  entity->rx_next = count + 1;
-  entity->rx_deliv = count;
-
-  LOG_I(PDCP,
-        "DRB %d: Applied PDCP Count\n"
-        "  DL COUNT - SN: %d HFN: %d (COUNT=%u)\n"
-        "  SN length: %s\n"
-        "   PDCP entity state after update:\n"
-        "     rx_next  = %u\n"
-        "     rx_deliv = %u\n"
-        "     sn_size  = %d\n"
-        "     sn_max   = %d\n"
-        "     window   = %d\n",
-        entity->rb_id,
-        pdcp_count.sn,
-        pdcp_count.hfn,
-        count,
-        sn_size == LONG_SN_SIZE ? "18-bit" : "12-bit",
-        entity->rx_next,
-        entity->rx_deliv,
-        entity->sn_size,
-        entity->sn_max,
-        entity->window_size);
+  return (pdcp_count.hfn << sn_size) | (pdcp_count.sn & sn_mask);
 }
 
-/** @note: this function applies to the gNB only */
-static void nr_pdcp_entity_set_count_ul(nr_pdcp_entity_t *entity, nr_pdcp_count_t pdcp_count, int sn_size)
+/** @brief Apply the DL COUNT received in SN status transfer: TX_NEXT. gNB only. */
+static void nr_pdcp_entity_set_count_dl(nr_pdcp_entity_t *entity, nr_pdcp_count_t pdcp_count, int sn_size)
 {
-  // SN length in bits
-  const uint32_t sn_mask = (1 << sn_size) - 1;
-
-  // Compose COUNT values for tx_next (DL) and rx_next (UL)
-  uint32_t count = (pdcp_count.hfn << sn_size) | (pdcp_count.sn & sn_mask);
-
-  // Apply the COUNT values
-  entity->tx_next = count;
-
+  entity->tx_next = pdcp_count_compose(pdcp_count, sn_size);
   LOG_I(PDCP,
-        "DRB %d: Applied PDCP Count\n"
-        "  UL COUNT - SN: %d HFN: %d (COUNT=%u)\n"
-        "  SN length: %s\n"
-        "   PDCP entity state after update:\n"
-        "     tx_next  = %u\n"
-        "     sn_size  = %d\n"
-        "     sn_max   = %d\n"
-        "     window   = %d\n",
+        "DRB %d: applied DL COUNT SN %u HFN %u (%s SN): tx_next %u\n",
         entity->rb_id,
         pdcp_count.sn,
         pdcp_count.hfn,
-        count,
         sn_size == LONG_SN_SIZE ? "18-bit" : "12-bit",
-        entity->tx_next,
-        entity->sn_size,
-        entity->sn_max,
-        entity->window_size);
+        entity->tx_next);
+}
+
+/** @brief Apply the UL COUNT received in SN status transfer: first missing UL
+ *  SDU, so RX_DELIV = RX_NEXT = COUNT (TS 38.323 7.1). gNB only. */
+static void nr_pdcp_entity_set_count_ul(nr_pdcp_entity_t *entity, nr_pdcp_count_t pdcp_count, int sn_size)
+{
+  uint32_t count = pdcp_count_compose(pdcp_count, sn_size);
+  entity->rx_deliv = count;
+  entity->rx_next = count;
+  LOG_I(PDCP,
+        "DRB %d: applied UL COUNT SN %u HFN %u (%s SN): rx_deliv %u rx_next %u\n",
+        entity->rb_id,
+        pdcp_count.sn,
+        pdcp_count.hfn,
+        sn_size == LONG_SN_SIZE ? "18-bit" : "12-bit",
+        entity->rx_deliv,
+        entity->rx_next);
 }
 
 nr_pdcp_entity_t *new_nr_pdcp_entity(
