@@ -2963,6 +2963,21 @@ static void handle_mac_uecap_info(NR_UE_MAC_INST_t *mac, NR_UE_NR_Capability_t *
   }
 }
 
+/** @brief Reconfiguration with sync: from now until the MAC reset applied with the
+ *  CellGroupConfig (handle_reconfiguration_with_sync()), DL data is not delivered to RLC.
+ *  RRC calls it before re-establishing RLC, so that no PDU received from the source cell
+ *  reaches a re-established RLC entity: TS 38.331 5.3.5.5.2 resets the MAC before the RLC
+ *  bearers are handled, while the CellGroupConfig reaches MAC only at its next slot. */
+void nr_ue_mac_stop_rx_for_sync(module_id_t module_id)
+{
+  NR_UE_MAC_INST_t *mac = get_mac_inst(module_id);
+  int ret = pthread_mutex_lock(&mac->if_mutex);
+  AssertFatal(!ret, "mutex failed %d\n", ret);
+  mac->rx_stopped_for_sync = true;
+  ret = pthread_mutex_unlock(&mac->if_mutex);
+  AssertFatal(!ret, "mutex failed %d\n", ret);
+}
+
 void nr_rrc_mac_config_req_cg(module_id_t module_id,
                               int cc_idP,
                               int hfn,

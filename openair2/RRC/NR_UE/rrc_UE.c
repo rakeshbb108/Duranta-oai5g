@@ -1108,6 +1108,9 @@ static bool nr_rrc_cellgroup_configuration(NR_UE_RRC_INST_t *rrc, NR_CellGroupCo
     nr_rrc_handle_SetupRelease_RLF_TimersAndConstants(rrc, spCellConfig->rlf_TimersAndConstants);
   }
 
+  /* reconfiguration with sync: MAC stops delivering DL data before RLC is re-established */
+  if (spCellConfig && spCellConfig->reconfigurationWithSync)
+    nr_ue_mac_stop_rx_for_sync(rrc->ue_id);
   nr_rrc_manage_rlc_bearers(rrc, cgConfig);
   return true;
 }

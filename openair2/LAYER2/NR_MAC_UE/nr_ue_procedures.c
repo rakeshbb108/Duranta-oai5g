@@ -4333,6 +4333,15 @@ static void nr_ue_process_mac_pdu(NR_UE_MAC_INST_t *mac, nr_downlink_indication_
     }
   }
 
+  if (mac->rx_stopped_for_sync) {
+    LOG_D(NR_MAC,
+          "[UE %d][%d.%d] %d DL SDU(s) dropped: reconfiguration with sync pending\n",
+          mac->ue_id,
+          frameP,
+          slot,
+          num_data_ind);
+    return;
+  }
   nr_mac_rlc_data_ind(mac->ue_id, mac->ue_id, false, data_ind, num_data_ind);
 }
 

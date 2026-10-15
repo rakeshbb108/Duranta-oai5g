@@ -153,6 +153,7 @@ NR_UE_MAC_INST_t *get_mac_inst(module_id_t module_id)
 void reset_mac_inst(NR_UE_MAC_INST_t *nr_mac)
 {
   // MAC reset according to 38.321 Section 5.12
+  nr_mac->rx_stopped_for_sync = false;
 
   // initialize Bj for each logical channel to zero
   // TODO reset also other status variables of LC, is this ok?

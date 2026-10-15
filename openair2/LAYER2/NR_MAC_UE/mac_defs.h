@@ -648,6 +648,8 @@ typedef struct NR_UE_MAC_INST_s {
   bool msg3_C_RNTI;
   bool sr_fallback_ra_triggered; // SR-fallback RA triggered; block re-trigger until PUCCH SR resource is restored
   pthread_mutex_t if_mutex;
+  // reconfiguration with sync received by RRC, MAC not reset yet: no DL data to RLC
+  bool rx_stopped_for_sync;
   ue_mac_stats_t stats;
   notifiedFIFO_t input_nf;
   // set when mac configuration changes during reconf with sync
