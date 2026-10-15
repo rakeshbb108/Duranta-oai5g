@@ -1099,6 +1099,45 @@ bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_forward_s
   return ok;
 }
 
+/** @brief Xn HO target: hold the DL SDUs forwarded on this DRB until
+ *  nr_pdcp_release_forwarded(), i.e. until the source SN status is applied */
+void nr_pdcp_hold_forwarded(ue_id_t ue_id, rb_id_t rb_id)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  if (rb)
+    rb->fwd_hold = true;
+  else
+    LOG_E(PDCP, "UE %lx: cannot hold forwarded data, DRB %ld not found\n", ue_id, rb_id);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief Xn HO target: SN status applied, send the held forwarded SDUs */
+void nr_pdcp_release_forwarded(ue_id_t ue_id, rb_id_t rb_id)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  if (rb)
+    nr_pdcp_entity_release_forwarded(rb, ue_id);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief Xn HO target: DL SDU received on the DRB's Xn-U forwarding tunnel
+ *  @param sn PDCP SN from the PDCP PDU Number extension header, -1 if absent */
+void nr_pdcp_forwarded_sdu(ue_id_t ue_id, int rb_id, uint8_t *buf, int size, int sn)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  if (rb)
+    nr_pdcp_entity_recv_forwarded_sdu(rb, ue_id, (char *)buf, size, sn);
+  else
+    LOG_W(PDCP, "UE %lx: forwarded SDU for unknown DRB %d dropped\n", ue_id, rb_id);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
 /** @brief Mark a DL SDU (identified by its PDCP COUNT) as confirmed delivered,
  *  removing it from the Xn HO forwarding shadow ring. */
 void nr_pdcp_entity_ack_sdu(ue_id_t ue_id, rb_id_t rb_id, uint32_t count)

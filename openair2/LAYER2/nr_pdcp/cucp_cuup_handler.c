@@ -193,8 +193,10 @@ static UP_TL_information_t xn_gtpu_create(uint32_t ue_id, int drb_id, int pduses
   LOG_I(GTPU, "Xn-U fwd tunnel: DRB=%d (PDU session %d) incoming_rb_id=%d\n", drb_id, pdusession_id, req.incoming_rb_id);
 
   gtpv1u_gnb_create_tunnel_resp_t resp = {0};
-  int ret = gtpv1u_create_ngu_tunnel(xnuinst, &req, &resp, nr_pdcp_data_req_drb, sdap_data_req, NULL);
+  int ret = gtpv1u_create_ngu_tunnel(xnuinst, &req, &resp, NULL, NULL, NULL);
   AssertFatal(ret >= 0, "Unable to create GTP-U tunnel for Xn-U forwarding, DRB %d\n", drb_id);
+  /* forwarded PDCP SDUs (with or without PDCP SN) go to PDCP, not through SDAP */
+  GtpuSetForwardedDataCallback(resp.gnb_NGu_teid, nr_pdcp_forwarded_sdu);
   AssertFatal(resp.gnb_addr.length == sizeof(in_addr_t),
               "GTP tunnel response address length %d does not match IPv4 size %zu\n",
               resp.gnb_addr.length,
@@ -348,6 +350,12 @@ void e1_bearer_context_setup(const e1ap_bearer_setup_req_t *req)
     memcpy(security_parameters.integrity_key, req->secInfo.integrityProtectionKey, NR_K_KEY_SIZE);
     e1_add_bearers(cu_up_ue_id, &DRB_configList, &security_parameters);
     ASN_STRUCT_RESET(asn_DEF_NR_DRB_ToAddModList, &DRB_configList.list);
+
+    /* Xn HO target: forwarded DL data waits for the source SN status (DL COUNT) */
+    for (int d = 0; d < resp_pdu->numDRBSetup; d++) {
+      if (req_pdu->DRBnGRanList[d].dl_fwd_tnl_req)
+        nr_pdcp_hold_forwarded(cu_up_ue_id, req_pdu->DRBnGRanList[d].id);
+    }
 
     /** GTP tunnel for N3/to core: one GTP-U tunnel per PDU session. */
     LOG_D(E1AP, "In %s: GTP tunnel for N3/to core for PDU Session %ld\n", __func__, req_pdu->sessionId);
@@ -613,6 +621,8 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
                              dl_count,
                              ul_count,
                              is_sn_len_18 ? LONG_SN_SIZE : SHORT_SN_SIZE);
+        /* Xn HO target: the DL COUNT is known, send the forwarded data held so far */
+        nr_pdcp_release_forwarded(req->gNB_cu_up_ue_id, to_modif->id);
       }
 
       // Early Data Forwarding Indicator: stop Xn HO DL forwarding for this DRB now

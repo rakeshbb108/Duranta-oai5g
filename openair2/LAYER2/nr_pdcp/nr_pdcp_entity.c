@@ -145,6 +145,88 @@ void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id,
         n);
 }
 
+bool nr_pdcp_entity_forwarded_count(const nr_pdcp_entity_t *entity, int sn, uint32_t *count)
+{
+  if (sn < 0 || sn > entity->sn_max)
+    return false;
+  uint32_t d = ((entity->tx_next & entity->sn_max) - (uint32_t)sn) & entity->sn_max;
+  if (d == 0 || d > (uint32_t)entity->window_size || d > entity->tx_next)
+    return false;
+  *count = entity->tx_next - d;
+  return true;
+}
+
+static void send_forwarded_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, char *buf, int size, int sn)
+{
+  int max_size = nr_max_pdcp_pdu_size(size);
+  char pdu[max_size];
+  uint32_t count;
+  int pdu_size;
+  if (sn >= 0) {
+    if (!nr_pdcp_entity_forwarded_count(entity, sn, &count)) {
+      LOG_W(PDCP,
+            "UE %lx DRB %d: forwarded SDU with SN %d outside the window below TX_NEXT %u, dropped\n",
+            ue_id,
+            entity->rb_id,
+            sn,
+            entity->tx_next);
+      return;
+    }
+    pdu_size = nr_pdcp_entity_process_sdu_with_count(entity, buf, size, count, pdu, max_size);
+  } else {
+    count = entity->tx_next;
+    pdu_size = entity->process_sdu(entity, buf, size, 0, pdu, max_size);
+  }
+  /* NULL deliver_pdu data and COUNT as SDU ID, as nr_pdcp_data_req_drb() for DL data */
+  if (pdu_size > 0)
+    entity->deliver_pdu(NULL, ue_id, entity->rb_id, pdu, pdu_size, count);
+}
+
+void nr_pdcp_entity_recv_forwarded_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, char *buf, int size, int sn)
+{
+  if (!entity->fwd_hold) {
+    send_forwarded_sdu(entity, ue_id, buf, size, sn);
+    return;
+  }
+  if (entity->fwd_held_count >= NR_PDCP_SHADOW_RING_CAP_COUNT) {
+    LOG_W(PDCP, "UE %lx DRB %d: too many forwarded SDUs held, dropping SN %d\n", ue_id, entity->rb_id, sn);
+    return;
+  }
+  nr_pdcp_fwd_sdu_t *sdu = calloc_or_fail(1, sizeof(*sdu) + size);
+  sdu->sn = sn;
+  sdu->size = size;
+  memcpy(sdu->data, buf, size);
+  if (entity->fwd_held_tail)
+    entity->fwd_held_tail->next = sdu;
+  else
+    entity->fwd_held_head = sdu;
+  entity->fwd_held_tail = sdu;
+  entity->fwd_held_count++;
+}
+
+void nr_pdcp_entity_release_forwarded(nr_pdcp_entity_t *entity, ue_id_t ue_id)
+{
+  if (!entity->fwd_hold)
+    return;
+  entity->fwd_hold = false;
+  int n = entity->fwd_held_count;
+  nr_pdcp_fwd_sdu_t *sdu = entity->fwd_held_head;
+  entity->fwd_held_head = entity->fwd_held_tail = NULL;
+  entity->fwd_held_count = 0;
+  while (sdu != NULL) {
+    nr_pdcp_fwd_sdu_t *next = sdu->next;
+    send_forwarded_sdu(entity, ue_id, sdu->data, sdu->size, sdu->sn);
+    free(sdu);
+    sdu = next;
+  }
+  LOG_I(PDCP,
+        "UE %lx DRB %d: SN status applied (TX_NEXT %u), sent %d held forwarded SDUs\n",
+        ue_id,
+        entity->rb_id,
+        entity->tx_next,
+        n);
+}
+
 void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring)
 {
   nr_pdcp_shadow_sdu_t *cur = ring->head;
@@ -746,6 +828,11 @@ static void nr_pdcp_entity_delete(nr_pdcp_entity_t *entity)
     entity->free_integrity(entity->integrity_context);
   if (entity->shadow_ring != NULL)
     nr_pdcp_shadow_ring_free(entity->shadow_ring);
+  for (nr_pdcp_fwd_sdu_t *sdu = entity->fwd_held_head; sdu != NULL;) {
+    nr_pdcp_fwd_sdu_t *next = sdu->next;
+    free(sdu);
+    sdu = next;
+  }
   free(entity);
 }
 

@@ -65,6 +65,10 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
                                   const bool      rqi,
                                   const int       pdusession_id);
 
+  /** @brief Receive callback of an Xn-U DL data forwarding tunnel: the payload is a PDCP SDU,
+   *  sn is the PDCP SN from the PDCP PDU Number extension header, or -1 if absent */
+  typedef void (*gtpCallbackFwd)(ue_id_t ue_id, int rb_id, uint8_t *buf, int len, int sn);
+
   /** @brief GTP callback payload (TS 23.527 clause 5.3.3.1) */
   typedef struct gtpv1u_error_indication_ind_s {
     instance_t gtp_instance;
@@ -139,6 +143,7 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
                                               in_addr_t newOutgoingAddr,
                                               teid_t newOutgoingTeid);
 
+  void GtpuSetForwardedDataCallback(teid_t incoming_teid, gtpCallbackFwd callBackFwd);
   int newGtpuDeleteOneTunnel(instance_t instance, ue_id_t ue_id, int rb_id);
   int newGtpuDeleteAllTunnels(instance_t instance, ue_id_t ue_id);
 

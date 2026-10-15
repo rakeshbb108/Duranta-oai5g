@@ -116,5 +116,8 @@ void nr_pdcp_get_drb_count_values(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_count_t 
 
 void nr_pdcp_entity_ack_sdu(ue_id_t ue_id, rb_id_t rb_id, uint32_t count);
 bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_forward_sdu_t forward_sdu, void *data);
+void nr_pdcp_hold_forwarded(ue_id_t ue_id, rb_id_t rb_id);
+void nr_pdcp_release_forwarded(ue_id_t ue_id, rb_id_t rb_id);
+void nr_pdcp_forwarded_sdu(ue_id_t ue_id, int rb_id, uint8_t *buf, int size, int sn);
 
 #endif /* NR_PDCP_OAI_API_H */

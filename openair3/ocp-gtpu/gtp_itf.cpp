@@ -139,6 +139,8 @@ typedef struct {
   gtpv1u_error_indication_cb_fn_t errorIndicationCallBack;
   /** PDU Session ID (1..255) */
   uint16_t pdusession_id;
+  /** Xn-U DL data forwarding tunnel (target): forwarded PDCP SDUs go here, not to SDAP */
+  gtpCallbackFwd callBackFwd;
 } ueidData_t;
 
 typedef struct {
@@ -922,6 +924,17 @@ int gtpv1u_create_ngu_tunnel(const instance_t instance,
   return !GTPNOK;
 }
 
+void GtpuSetForwardedDataCallback(teid_t incoming_teid, gtpCallbackFwd callBackFwd)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  auto tunnel = globGtp.te2ue_mapping.find(incoming_teid);
+  if (tunnel != globGtp.te2ue_mapping.end())
+    tunnel->second.callBackFwd = callBackFwd;
+  else
+    LOG_E(GTPU, "set forwarded data callback: unknown TEID 0x%x\n", incoming_teid);
+  pthread_mutex_unlock(&globGtp.gtp_lock);
+}
+
 int gtpv1u_update_ue_id(const instance_t instanceP, ue_id_t old_ue_id, ue_id_t new_ue_id)
 {
   pthread_mutex_lock(&globGtp.gtp_lock);
@@ -1560,8 +1573,10 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
   const uint32_t destinationL2Id = 0;
 
   if (sdu_buffer_size > 0) {
-    if (fwd_pdcp_sn >= 0) {
-      LOG_W(GTPU, "[%d] dropping forwarded SDU with PDCP SN %d: SN-preserving forwarding not supported\n", h, fwd_pdcp_sn);
+    if (uedata.callBackFwd) {
+      uedata.callBackFwd(uedata.ue_id, rb_id, sdu_buffer, sdu_buffer_size, fwd_pdcp_sn);
+    } else if (fwd_pdcp_sn >= 0) {
+      LOG_W(GTPU, "[%d] dropping SDU with PDCP SN %d on a tunnel that is not a forwarding tunnel\n", h, fwd_pdcp_sn);
     } else if (uedata.callBackSDAP) {
       // TS 29.281 5.2.2.7 / TS 38.415 require a QFI (PDU Session Container) on every N3 G-PDU,
       // so a DL PDU with no QFI (e.g. a UPF-generated Router Advertisement) is out-of-spec.

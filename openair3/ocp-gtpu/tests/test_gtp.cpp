@@ -281,6 +281,69 @@ TEST(gtp, multi_qos_flows)
   run_multi_qos_flows_test(ue_id, pdu_id, qfis, sizeof(qfis) / sizeof(qfis[0]));
 }
 
+/* Xn-U DL data forwarding: G-PDUs from gtpv1uSendDirectWithPdcpSn() reach the forwarded-data
+ * callback with the PDCP SN of the (Long) PDCP PDU Number extension, or -1 without it, and
+ * never the SDAP callback of the tunnel */
+static int fwd_recv_count = 0;
+static const int fwd_sns[] = {4094, 200000, -1};
+static const int fwd_sn_sizes[] = {12, 18, 18};
+static void recv_fwd(ue_id_t ue_id, int rb_id, uint8_t *buf, int len, int sn)
+{
+  ASSERT_LT(fwd_recv_count, 3);
+  EXPECT_EQ(rb_id, 4);
+  EXPECT_EQ(len, 2);
+  EXPECT_EQ(buf[0], fwd_recv_count);
+  EXPECT_EQ(sn, fwd_sns[fwd_recv_count]);
+  fwd_recv_count++;
+}
+
+static bool recv_fwd_wrong_path(protocol_ctxt_t *ctxt,
+                                const ue_id_t ue_id,
+                                const srb_flag_t flag,
+                                const mui_t mui,
+                                const confirm_t confirm,
+                                const sdu_size_t size,
+                                unsigned char *const buf,
+                                const pdcp_transmission_mode_t modeP,
+                                const uint32_t *sourceL2Id,
+                                const uint32_t *destinationL2Id,
+                                const uint8_t qfi,
+                                const bool rqi,
+                                const int pdusession_id)
+{
+  ADD_FAILURE() << "forwarded SDU delivered to SDAP";
+  return true;
+}
+
+TEST(gtp, xnu_forwarded_pdcp_sn)
+{
+  const char *ip1 = "127.0.0.1";
+  const char *ip2 = "127.0.0.2";
+  uint16_t port = 4567;
+  instance_t ep1 = init_gtp(ip1, port);
+  instance_t ep2 = init_gtp(ip2, port);
+  const uint32_t ue_id = 7;
+  const int drb_id = 4;
+
+  transport_layer_addr_t null_addr = {.length = 32};
+  teid_t t1 = newGtpuCreateTunnel(ep1, ue_id, drb_id, drb_id, -1, null_addr, NULL, recv_fwd_wrong_path, NULL);
+  GtpuSetForwardedDataCallback(t1, recv_fwd);
+  transport_layer_addr_t tl_addr1 = get_tl_addr(AF_INET, ip1);
+  newGtpuCreateTunnel(ep2, ue_id, drb_id, drb_id, t1, tl_addr1, NULL, NULL, NULL);
+
+  for (int i = 0; i < 3; i++) {
+    uint8_t buf[2] = {(uint8_t)i, 0xaa};
+    gtpv1uSendDirectWithPdcpSn(ep2, ue_id, drb_id, buf, sizeof(buf), fwd_sns[i], fwd_sn_sizes[i]);
+  }
+  usleep(100 * 1000);
+  EXPECT_EQ(fwd_recv_count, 3);
+
+  EXPECT_EQ(newGtpuDeleteAllTunnels(ep1, ue_id), 0);
+  EXPECT_EQ(newGtpuDeleteAllTunnels(ep2, ue_id), 0);
+  EXPECT_EQ(gtpv1Term(ep1), 0);
+  EXPECT_EQ(gtpv1Term(ep2), 0);
+}
+
 static int recv_count = 0;
 static bool recv_basic_conn(protocol_ctxt_t *ctxt,
                             const srb_flag_t srb_flagP,

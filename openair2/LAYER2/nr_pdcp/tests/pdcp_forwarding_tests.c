@@ -6,6 +6,7 @@
  * PDCP SN in ascending COUNT order once DL is frozen, and the DL COUNT reported
  * afterwards is the first COUNT without SN (TX_NEXT at freeze). */
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -39,8 +40,23 @@ static void deliver_sdu(void *data, nr_pdcp_entity_t *entity, char *buf, int siz
 {
 }
 
+#define MAX_TX 16
+static int tx_n;
+static uint32_t tx_count[MAX_TX];
+static int tx_sn[MAX_TX];
+static char tx_payload[MAX_TX];
+
+/* no security: the PDU is header + plaintext SDU */
 static void deliver_pdu(void *data, ue_id_t ue_id, int rb_id, char *buf, int size, int sdu_id)
 {
+  CHECK(tx_n < MAX_TX);
+  CHECK(data == NULL); /* deliver_pdu_drb_gnb() asserts it */
+  const uint8_t *p = (const uint8_t *)buf;
+  bool is_12 = size == 3;
+  tx_count[tx_n] = (uint32_t)sdu_id;
+  tx_sn[tx_n] = is_12 ? ((p[0] & 0x0f) << 8) | p[1] : ((p[0] & 0x03) << 16) | (p[1] << 8) | p[2];
+  tx_payload[tx_n] = buf[size - 1];
+  tx_n++;
 }
 
 static nr_pdcp_entity_t *new_drb(int sn_size)
@@ -111,12 +127,69 @@ static void test_ack_unknown_count(void)
   e->delete_entity(e);
 }
 
+/* target: forwarded SDUs wait for the SN status, then keep their arrival order; an SDU
+ * with SN gets the COUNT below the received DL COUNT with that SN (here across an HFN
+ * boundary), an SDU without SN is numbered from the DL COUNT */
+static void test_target_hold_and_count(void)
+{
+  nr_pdcp_entity_t *e = new_drb(12);
+  e->fwd_hold = true;
+  char p[4] = {'a', 'b', 'c', 'd'};
+  tx_n = 0;
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &p[0], 1, 4094);
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &p[1], 1, 4095);
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &p[2], 1, 0);
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &p[3], 1, -1);
+  CHECK(tx_n == 0);
+
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 3, .sn = 1}, 12);
+  nr_pdcp_entity_release_forwarded(e, 1);
+  CHECK(tx_n == 4);
+  CHECK(tx_count[0] == 3 * 4096 - 2 && tx_sn[0] == 4094 && tx_payload[0] == 'a');
+  CHECK(tx_count[1] == 3 * 4096 - 1 && tx_sn[1] == 4095 && tx_payload[1] == 'b');
+  CHECK(tx_count[2] == 3 * 4096 && tx_sn[2] == 0 && tx_payload[2] == 'c');
+  CHECK(tx_count[3] == 3 * 4096 + 1 && tx_sn[3] == 1 && tx_payload[3] == 'd');
+  CHECK(e->tx_next == 3 * 4096 + 2 && !e->fwd_hold);
+
+  /* after release: sent as they arrive */
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &p[0], 1, -1);
+  CHECK(tx_n == 5 && tx_count[4] == 3 * 4096 + 2);
+  e->delete_entity(e);
+}
+
+static void test_target_count_window(void)
+{
+  nr_pdcp_entity_t *e = new_drb(12);
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 3, .sn = 1}, 12);
+  uint32_t count;
+  /* the SN of DL COUNT itself was not numbered by the source */
+  CHECK(!nr_pdcp_entity_forwarded_count(e, 1, &count));
+  /* more than a window (2048) below DL COUNT */
+  CHECK(!nr_pdcp_entity_forwarded_count(e, 2000, &count));
+  CHECK(nr_pdcp_entity_forwarded_count(e, 2050, &count) && count == 3 * 4096 + 1 - 2047);
+  CHECK(!nr_pdcp_entity_forwarded_count(e, 4096, &count));
+  tx_n = 0;
+  char c = 'x';
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &c, 1, 1);
+  CHECK(tx_n == 0);
+  e->delete_entity(e);
+
+  /* 18-bit SN, no HFN: nothing below COUNT 0 */
+  e = new_drb(18);
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 0, .sn = 5}, 18);
+  CHECK(nr_pdcp_entity_forwarded_count(e, 0, &count) && count == 0);
+  CHECK(!nr_pdcp_entity_forwarded_count(e, 262143, &count));
+  e->delete_entity(e);
+}
+
 int main(void)
 {
   logInit();
   test_forward_unacked_in_order();
   test_forward_sn_wraps();
   test_ack_unknown_count();
+  test_target_hold_and_count();
+  test_target_count_window();
   printf("pdcp_forwarding_tests: OK\n");
   return 0;
 }

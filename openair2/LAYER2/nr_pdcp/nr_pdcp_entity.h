@@ -63,6 +63,14 @@ typedef struct nr_pdcp_shadow_sdu_s {
 /* Xn HO source: hands a DL PDCP SDU to the target; sn < 0 if the SDU has no SN */
 typedef void (*nr_pdcp_forward_sdu_t)(void *data, ue_id_t ue_id, int rb_id, const char *buf, int size, int sn, int sn_size);
 
+/* Xn HO target: forwarded DL SDU held until the SN status from the source is applied */
+typedef struct nr_pdcp_fwd_sdu_s {
+  int sn; /* PDCP SN received with the SDU, -1 if none */
+  int size;
+  struct nr_pdcp_fwd_sdu_s *next;
+  char data[];
+} nr_pdcp_fwd_sdu_t;
+
 typedef struct nr_pdcp_shadow_ring_s {
   nr_pdcp_shadow_sdu_t *head; /* oldest, evicted first when over cap */
   nr_pdcp_shadow_sdu_t *tail; /* newest */
@@ -225,12 +233,28 @@ typedef struct nr_pdcp_entity_s {
   nr_pdcp_forward_sdu_t forward_sdu;
   void *forward_sdu_data;
 
+  /* Xn HO target: forwarded DL SDUs are held, in arrival order, while fwd_hold */
+  bool fwd_hold;
+  nr_pdcp_fwd_sdu_t *fwd_held_head;
+  nr_pdcp_fwd_sdu_t *fwd_held_tail;
+  int fwd_held_count;
+
 } nr_pdcp_entity_t;
 
 /* Xn HO source: freeze DL and forward the backlog. Every SDU still in the shadow
  * ring is passed to forward_sdu with its PDCP SN, in ascending COUNT order; later
  * DL SDUs are to be passed to forward_sdu without SN by the caller of process_sdu. */
 void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id, nr_pdcp_forward_sdu_t forward_sdu, void *data);
+
+/* Xn HO target: COUNT of a forwarded SDU with PDCP SN sn. The source forwards with SN
+ * only SDUs it numbered before the DL COUNT it reported, now TX_NEXT: the COUNT is the
+ * one below TX_NEXT, at most a window away, whose SN is sn. False if there is none. */
+bool nr_pdcp_entity_forwarded_count(const nr_pdcp_entity_t *entity, int sn, uint32_t *count);
+/* Xn HO target: a forwarded DL SDU (sn < 0: without SN), held while fwd_hold, else sent:
+ * with the COUNT of its SN, or numbered from TX_NEXT if without SN */
+void nr_pdcp_entity_recv_forwarded_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, char *buf, int size, int sn);
+/* Xn HO target: SN status applied, send the held SDUs in arrival order and stop holding */
+void nr_pdcp_entity_release_forwarded(nr_pdcp_entity_t *entity, ue_id_t ue_id);
 
 /* Sibling to entity->process_sdu() that writes/ciphers using an explicit COUNT
  * instead of entity->tx_next, and does not advance tx_next. Used at the target
