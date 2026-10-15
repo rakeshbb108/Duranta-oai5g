@@ -50,6 +50,9 @@ typedef struct {
 #define NR_PDCP_SHADOW_RING_CAP_COUNT 2048
 #define NR_PDCP_SHADOW_RING_CAP_BYTES (4 * 1024 * 1024)
 #define NR_PDCP_SHADOW_SDU_NO_QFI (-1)
+/* Xn HO target: held forwarded SDUs, a full source backlog (with SN) plus the fresh SDUs
+ * (without SN) forwarded until the SN status is applied */
+#define NR_PDCP_FWD_HOLD_CAP_COUNT (4 * NR_PDCP_SHADOW_RING_CAP_COUNT)
 
 typedef struct nr_pdcp_shadow_sdu_s {
   uint32_t count; /* original PDCP COUNT this plaintext SDU was assigned */

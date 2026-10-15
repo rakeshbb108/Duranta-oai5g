@@ -551,8 +551,11 @@ rb_found:
   if (!is_gnb)
     return;
 
-  /* prune the PDCP shadow buffer used for Xn HO DL data forwarding */
-  nr_pdcp_entity_ack_sdu(ue->ue_id, rb_id, (uint32_t)sdu_id);
+  /* prune the PDCP shadow buffer used for Xn HO DL data forwarding; PDCP uses the
+   * CU UE ID, as in deliver_sdu() */
+  if (!du_exists_f1_ue_data(ue->ue_id))
+    return;
+  nr_pdcp_entity_ack_sdu(du_get_f1_ue_data(ue->ue_id).secondary_ue, rb_id, (uint32_t)sdu_id);
 
 #if 0
   msg = itti_alloc_new_message(TASK_RLC_ENB, RLC_SDU_INDICATION);

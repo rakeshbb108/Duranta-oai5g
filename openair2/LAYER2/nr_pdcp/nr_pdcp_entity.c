@@ -188,7 +188,7 @@ void nr_pdcp_entity_recv_forwarded_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, 
     send_forwarded_sdu(entity, ue_id, buf, size, sn);
     return;
   }
-  if (entity->fwd_held_count >= NR_PDCP_SHADOW_RING_CAP_COUNT) {
+  if (entity->fwd_held_count >= NR_PDCP_FWD_HOLD_CAP_COUNT) {
     LOG_W(PDCP, "UE %lx DRB %d: too many forwarded SDUs held, dropping SN %d\n", ue_id, entity->rb_id, sn);
     return;
   }

@@ -49,8 +49,11 @@ static char tx_payload[MAX_TX];
 /* no security: the PDU is header + plaintext SDU */
 static void deliver_pdu(void *data, ue_id_t ue_id, int rb_id, char *buf, int size, int sdu_id)
 {
-  CHECK(tx_n < MAX_TX);
   CHECK(data == NULL); /* deliver_pdu_drb_gnb() asserts it */
+  if (tx_n >= MAX_TX) {
+    tx_n++;
+    return;
+  }
   const uint8_t *p = (const uint8_t *)buf;
   bool is_12 = size == 3;
   tx_count[tx_n] = (uint32_t)sdu_id;
@@ -182,6 +185,25 @@ static void test_target_count_window(void)
   e->delete_entity(e);
 }
 
+/* target: a full source backlog with SN must not push out the fresh SDUs (without SN)
+ * forwarded after it before the SN status arrives */
+static void test_target_hold_full_backlog(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  e->fwd_hold = true;
+  char c = 'z';
+  for (int sn = 0; sn < NR_PDCP_SHADOW_RING_CAP_COUNT; sn++)
+    nr_pdcp_entity_recv_forwarded_sdu(e, 1, &c, 1, sn);
+  for (int i = 0; i < 4; i++)
+    nr_pdcp_entity_recv_forwarded_sdu(e, 1, &c, 1, -1);
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 0, .sn = NR_PDCP_SHADOW_RING_CAP_COUNT}, 18);
+  tx_n = 0;
+  nr_pdcp_entity_release_forwarded(e, 1);
+  CHECK(tx_n == NR_PDCP_SHADOW_RING_CAP_COUNT + 4);
+  CHECK(e->tx_next == NR_PDCP_SHADOW_RING_CAP_COUNT + 4);
+  e->delete_entity(e);
+}
+
 int main(void)
 {
   logInit();
@@ -190,6 +212,7 @@ int main(void)
   test_ack_unknown_count();
   test_target_hold_and_count();
   test_target_count_window();
+  test_target_hold_full_backlog();
   printf("pdcp_forwarding_tests: OK\n");
   return 0;
 }
