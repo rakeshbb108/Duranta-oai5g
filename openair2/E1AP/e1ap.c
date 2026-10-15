@@ -634,8 +634,6 @@ void cuup_init_xnu(instance_t instance)
     getCxtE1(instance)->gtpInstXnU = gtpv1Init(tmp);
   }
   AssertFatal(getCxtE1(instance)->gtpInstXnU >= 0, "Failed to create mandatory CUUP Xn-U UDP listener\n");
-  extern instance_t *XnUGTPUInst;
-  XnUGTPUInst = &getCxtE1(instance)->gtpInstXnU;
 }
 
 void cucp_task_send_sctp_init_req(instance_t instance, char *my_addr)

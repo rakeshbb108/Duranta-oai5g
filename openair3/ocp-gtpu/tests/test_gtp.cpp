@@ -344,6 +344,49 @@ TEST(gtp, xnu_forwarded_pdcp_sn)
   EXPECT_EQ(gtpv1Term(ep2), 0);
 }
 
+/* End Marker: gtpv1uSendEndMarker() reaches the End Marker callback of the receiving
+ * tunnel, after the G-PDUs sent before it */
+static int em_data_count = 0;
+static int em_count = 0;
+static void em_recv_fwd(ue_id_t ue_id, int rb_id, uint8_t *buf, int len, int sn)
+{
+  EXPECT_EQ(em_count, 0);
+  em_data_count++;
+}
+static void em_recv_end_marker(ue_id_t ue_id, int rb_id)
+{
+  EXPECT_EQ(ue_id, 9u);
+  EXPECT_EQ(rb_id, 3);
+  EXPECT_EQ(em_data_count, 2);
+  em_count++;
+}
+
+TEST(gtp, end_marker_callback)
+{
+  instance_t ep1 = init_gtp("127.0.0.1", 4567);
+  instance_t ep2 = init_gtp("127.0.0.2", 4567);
+  const uint32_t ue_id = 9;
+  const int drb_id = 3;
+  transport_layer_addr_t null_addr = {.length = 32};
+  teid_t t1 = newGtpuCreateTunnel(ep1, ue_id, drb_id, drb_id, -1, null_addr, NULL, NULL, NULL);
+  GtpuSetForwardedDataCallback(t1, em_recv_fwd);
+  GtpuSetEndMarkerCallback(t1, em_recv_end_marker);
+  newGtpuCreateTunnel(ep2, ue_id, drb_id, drb_id, t1, get_tl_addr(AF_INET, "127.0.0.1"), NULL, NULL, NULL);
+
+  uint8_t buf[2] = {1, 2};
+  gtpv1uSendDirectWithPdcpSn(ep2, ue_id, drb_id, buf, sizeof(buf), 5, 18);
+  gtpv1uSendDirectWithPdcpSn(ep2, ue_id, drb_id, buf, sizeof(buf), -1, 18);
+  gtpv1uSendEndMarker(ep2, ue_id, drb_id);
+  usleep(100 * 1000);
+  EXPECT_EQ(em_data_count, 2);
+  EXPECT_EQ(em_count, 1);
+
+  EXPECT_EQ(newGtpuDeleteAllTunnels(ep1, ue_id), 0);
+  EXPECT_EQ(newGtpuDeleteAllTunnels(ep2, ue_id), 0);
+  EXPECT_EQ(gtpv1Term(ep1), 0);
+  EXPECT_EQ(gtpv1Term(ep2), 0);
+}
+
 static int recv_count = 0;
 static bool recv_basic_conn(protocol_ctxt_t *ctxt,
                             const srb_flag_t srb_flagP,

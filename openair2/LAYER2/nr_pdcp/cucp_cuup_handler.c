@@ -4,6 +4,7 @@
 
 #include "cucp_cuup_handler.h"
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +89,8 @@ static NR_DRB_ToAddMod_t *get_rrc_drb_to_addmod(const DRB_nGRAN_to_setup_t *drb,
 }
 
 static void cuup_release_pdu_session_up(uint32_t ue_id, int pdusession_id);
+static void n3_end_marker(ue_id_t ue_id, int pdusession_id);
+static void xnu_fwd_end_marker(ue_id_t ue_id, int drb_id);
 
 /** @brief N3 GTP-U Error Indication callback (TS 29.281 clause 7.3.1)
  * TS 23.527 clause 5.3.3.1: 5G-AN shall release PDU session resources immediately
@@ -159,6 +162,8 @@ static UP_TL_information_t n3_gtpu_create(const gtpv1u_gnb_create_tunnel_req_t *
   gtpv1u_gnb_create_tunnel_resp_t resp = {0};
   int ret = gtpv1u_create_ngu_tunnel(n3inst, req, &resp, nr_pdcp_data_req_drb, sdap_data_req, n3_error_indication);
   AssertFatal(ret >= 0, "Unable to create GTP-U tunnel for N3\n");
+  /* Xn HO source: the UPF End Marker after path switch ends DL forwarding */
+  GtpuSetEndMarkerCallback(resp.gnb_NGu_teid, n3_end_marker);
   AssertFatal(resp.gnb_addr.length == sizeof(in_addr_t),
               "GTP tunnel response address length %d does not match IPv4 size %zu\n",
               resp.gnb_addr.length,
@@ -197,6 +202,7 @@ static UP_TL_information_t xn_gtpu_create(uint32_t ue_id, int drb_id, int pduses
   AssertFatal(ret >= 0, "Unable to create GTP-U tunnel for Xn-U forwarding, DRB %d\n", drb_id);
   /* forwarded PDCP SDUs (with or without PDCP SN) go to PDCP, not through SDAP */
   GtpuSetForwardedDataCallback(resp.gnb_NGu_teid, nr_pdcp_forwarded_sdu);
+  GtpuSetEndMarkerCallback(resp.gnb_NGu_teid, xnu_fwd_end_marker);
   AssertFatal(resp.gnb_addr.length == sizeof(in_addr_t),
               "GTP tunnel response address length %d does not match IPv4 size %zu\n",
               resp.gnb_addr.length,
@@ -680,10 +686,82 @@ static void remove_ue_e1(const uint32_t ue_id)
   nr_sdap_delete_ue_entities(ue_id);
 }
 
+/* Xn HO source: UEs released by the CU-CP while still forwarding DL data; their UP
+ * resources go when the last End Marker is sent */
+static pthread_mutex_t release_pending_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t release_pending[MAX_MOBILES_PER_GNB];
+static int num_release_pending;
+
+/* the forwarding check and the pending list update are atomic, so that a release and the
+ * End Marker racing on the E1 and GTP-U threads cannot both leave the UE in place */
+
+/* true if the UE still forwards: then it is put pending release */
+static bool defer_release(uint32_t ue_id)
+{
+  pthread_mutex_lock(&release_pending_mutex);
+  bool defer = nr_pdcp_ue_forwarding(ue_id);
+  if (defer) {
+    AssertFatal(num_release_pending < MAX_MOBILES_PER_GNB, "too many UEs pending release\n");
+    release_pending[num_release_pending++] = ue_id;
+  }
+  pthread_mutex_unlock(&release_pending_mutex);
+  return defer;
+}
+
+/* true if the UE was pending release and no longer forwards: then it is forgotten */
+static bool take_release_pending(uint32_t ue_id)
+{
+  bool found = false;
+  pthread_mutex_lock(&release_pending_mutex);
+  for (int i = 0; i < num_release_pending && !nr_pdcp_ue_forwarding(ue_id); i++) {
+    if (release_pending[i] == ue_id) {
+      release_pending[i] = release_pending[--num_release_pending];
+      found = true;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&release_pending_mutex);
+  return found;
+}
+
+/** @brief Xn HO source: End Marker from the UPF on the N3 tunnel of a PDU session, after
+ *  the G-PDUs received before it were forwarded (same receive thread). Send an End
+ *  Marker on the Xn-U tunnel of each forwarding DRB of the session, then release a UE
+ *  whose release was deferred for forwarding. */
+static void n3_end_marker(ue_id_t ue_id, int pdusession_id)
+{
+  int drb_ids[MAX_DRBS_PER_UE];
+  int n = nr_pdcp_end_dl_forwarding(ue_id, pdusession_id, drb_ids);
+  instance_t xnuinst = get_xnu_gtp_instance();
+  for (int i = 0; i < n; i++) {
+    LOG_I(GTPU, "UE %lx DRB %d: End Marker on the Xn-U forwarding tunnel\n", ue_id, drb_ids[i]);
+    gtpv1uSendEndMarker(xnuinst, ue_id, drb_ids[i]);
+    e1_remove_xnu_tunnel(ue_id, drb_ids[i]);
+  }
+  if (take_release_pending(ue_id)) {
+    LOG_I(E1AP, "UE %lx: DL forwarding ended, releasing deferred UE\n", ue_id);
+    remove_ue_e1(ue_id);
+  }
+}
+
+/** @brief Xn HO target: End Marker on a DRB's Xn-U forwarding tunnel, after the forwarded
+ *  SDUs (same receive thread): NG-U data of the DRB may go once these are sent */
+static void xnu_fwd_end_marker(ue_id_t ue_id, int drb_id)
+{
+  LOG_I(GTPU, "UE %lx DRB %d: End Marker received on the Xn-U forwarding tunnel\n", ue_id, drb_id);
+  nr_pdcp_forwarding_end_received(ue_id, drb_id);
+  e1_remove_xnu_tunnel(ue_id, drb_id);
+}
+
 void e1_bearer_release_cmd(const e1ap_bearer_release_cmd_t *cmd)
 {
   LOG_I(E1AP, "releasing UE %d\n", cmd->gNB_cu_up_ue_id);
-  remove_ue_e1(cmd->gNB_cu_up_ue_id);
+  if (defer_release(cmd->gNB_cu_up_ue_id)) {
+    /* Xn HO source: DL forwarding goes on after the UE context release, until the End Marker */
+    LOG_I(E1AP, "UE %d: UP release deferred until DL forwarding ends\n", cmd->gNB_cu_up_ue_id);
+  } else {
+    remove_ue_e1(cmd->gNB_cu_up_ue_id);
+  }
 
   e1ap_bearer_release_cplt_t cplt = {
     .gNB_cu_cp_ue_id = cmd->gNB_cu_cp_ue_id,

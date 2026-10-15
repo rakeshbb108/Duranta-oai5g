@@ -15,6 +15,8 @@ typedef struct nr_pdcp_ue_t {
   ue_id_t ue_id;
   nr_pdcp_entity_t *srb[3];
   nr_pdcp_entity_t *drb[MAX_DRBS_PER_UE];
+  /* Xn HO source: removal requested while DRBs still forward, done when they end */
+  bool remove_pending;
 } nr_pdcp_ue_t;
 
 /***********************************************************************/

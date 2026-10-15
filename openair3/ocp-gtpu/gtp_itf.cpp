@@ -141,6 +141,8 @@ typedef struct {
   uint16_t pdusession_id;
   /** Xn-U DL data forwarding tunnel (target): forwarded PDCP SDUs go here, not to SDAP */
   gtpCallbackFwd callBackFwd;
+  /** End Marker received on this tunnel */
+  gtpCallbackEndMarker endMarkerCallBack;
 } ueidData_t;
 
 typedef struct {
@@ -204,10 +206,6 @@ static teid_t gtpv1uNewTeid(void)
 
 instance_t legacyInstanceMapping = 0;
 #define compatInst(a) ((a) == 0 || (a) == INSTANCE_DEFAULT ? legacyInstanceMapping : a)
-
-// set by cuup_init_xnu() once the dedicated Xn-U GTP-U instance is created;
-// lets Gtpv1uHandleEndMarker() recognize an End Marker arriving on Xn-U
-instance_t *XnUGTPUInst = NULL;
 
 #define getInstRetVoid(insT)                                 \
   auto instChk = globGtp.instances.find(compatInst(insT));   \
@@ -529,10 +527,9 @@ static int gtpv1u_header_len(const Gtpv1uMsgHeaderT *msg_hdr, uint32_t msg_buf_l
   return offset;
 }
 
-static void gtpv1uEndTunnel(instance_t instance, gtpv1u_enb_end_marker_req_t *req)
+/** @brief Send a GTP-U End Marker (TS 29.281) on the outgoing tunnel of a bearer */
+void gtpv1uSendEndMarker(instance_t instance, ue_id_t ue_id, int bearer_id)
 {
-  ue_id_t ue_id = req->rnti;
-  int bearer_id = req->rab_id;
   pthread_mutex_lock(&globGtp.gtp_lock);
   getInstRetVoid(compatInst(instance));
   getUeRetVoid(inst, ue_id);
@@ -922,6 +919,17 @@ int gtpv1u_create_ngu_tunnel(const instance_t instance,
   create_tunnel_resp->gnb_addr.length = sizeof(addr);
   create_tunnel_resp->pdusession_id = create_tunnel_req->pdusession_id;
   return !GTPNOK;
+}
+
+void GtpuSetEndMarkerCallback(teid_t incoming_teid, gtpCallbackEndMarker endMarkerCallBack)
+{
+  pthread_mutex_lock(&globGtp.gtp_lock);
+  auto tunnel = globGtp.te2ue_mapping.find(incoming_teid);
+  if (tunnel != globGtp.te2ue_mapping.end())
+    tunnel->second.endMarkerCallBack = endMarkerCallBack;
+  else
+    LOG_E(GTPU, "set End Marker callback: unknown TEID 0x%x\n", incoming_teid);
+  pthread_mutex_unlock(&globGtp.gtp_lock);
 }
 
 void GtpuSetForwardedDataCallback(teid_t incoming_teid, gtpCallbackFwd callBackFwd)
@@ -1369,9 +1377,6 @@ static int Gtpv1uHandleSupportedExt()
   return rc;
 }
 
-// When end marker arrives on the Xn-U instance, notify RRC so it can release
-// the forwarding tunnel deterministically instead of waiting for UE Context
-// Release.
 static int Gtpv1uHandleEndMarker(int h, uint8_t *msgBuf)
 {
   Gtpv1uMsgHeaderT *msgHdr = (Gtpv1uMsgHeaderT *)msgBuf;
@@ -1390,21 +1395,15 @@ static int Gtpv1uHandleEndMarker(int h, uint8_t *msgBuf)
     return GTPNOK;
   }
 
-  ue_id_t fwd_ue_id = tunnel->second.ue_id;
-  int pdusession_id = tunnel->second.pdusession_id;
+  ue_id_t ue_id = tunnel->second.ue_id;
   int rb_id = tunnel->second.incoming_rb_id;
+  gtpCallbackEndMarker cb = tunnel->second.endMarkerCallBack;
   pthread_mutex_unlock(&globGtp.gtp_lock);
 
   LOG_D(GTPU, "[%d] Received END marker packet for: TEID:0x%x\n", h, ntohl(msgHdr->teid));
-
-  if (XnUGTPUInst && h == *XnUGTPUInst) {
-    LOG_I(GTPU, "[%d] UE %lu: Xn-U forwarding complete for DRB %d (PDU session %d)\n", h, fwd_ue_id, rb_id, pdusession_id);
-    MessageDef *msg = itti_alloc_new_message(TASK_GTPV1_U, 0, GTPV1U_XNU_FORWARDING_COMPLETE);
-    GTPV1U_XNU_FORWARDING_COMPLETE(msg).ue_id = fwd_ue_id;
-    GTPV1U_XNU_FORWARDING_COMPLETE(msg).pdusession_id = pdusession_id;
-    GTPV1U_XNU_FORWARDING_COMPLETE(msg).rb_id = rb_id;
-    itti_send_msg_to_task(TASK_RRC_GNB, 0, msg);
-  }
+  /* handled on the receive thread of the tunnel, so after the G-PDUs received before it */
+  if (cb)
+    cb(ue_id, rb_id);
 
   return !GTPNOK;
 }
@@ -1757,7 +1756,9 @@ void *gtpv1uTask(void *args)
           break;
 
         case GTPV1U_ENB_END_MARKER_REQ:
-          gtpv1uEndTunnel(compatInst(myInstance), &GTPV1U_ENB_END_MARKER_REQ(message_p));
+          gtpv1uSendEndMarker(compatInst(myInstance),
+                              GTPV1U_ENB_END_MARKER_REQ(message_p).rnti,
+                              GTPV1U_ENB_END_MARKER_REQ(message_p).rab_id);
           itti_free(TASK_GTPV1_U, GTPV1U_ENB_END_MARKER_REQ(message_p).buffer);
           break;
 

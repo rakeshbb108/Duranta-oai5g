@@ -745,62 +745,6 @@ int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
   return 0;
 }
 
-/** @brief Target gNB: Xn-U DL forwarding for one DRB ended (GTP-U End Marker received on
- *  the Xn-U instance). Release that DRB's forwarding tunnel now instead of waiting for UE
- *  Context Release. The source's N3-side forwarding tunnel is shared per PDU session, so a
- *  path-switch on the core side can legitimately emit one End Marker per QoS flow — release
- *  is scoped to msg->rb_id so a second, redundant notification for the same DRB just no-ops
- *  at the CU-UP instead of re-touching every DRB.
- *
- *  Sent to the target's own CU-UP as an E1AP Bearer Context Modification Request carrying
- *  the Early Data Forwarding Indicator extension (TS 38.463 clause 9.3.1.51) on the DRB To
- *  Modify Item, so this works across a split CU-CP/CU-UP deployment (a local-only call
- *  cannot reach the CU-UP's GTP-U state when it runs in a separate process). */
-void rrc_gNB_process_XNU_FORWARDING_COMPLETE(gNB_RRC_INST *rrc, const gtpv1u_xnu_forwarding_complete_t *msg)
-{
-  rrc_gNB_ue_context_t *ue_ctx = rrc_gNB_get_ue_context(rrc, msg->ue_id);
-  if (ue_ctx == NULL) {
-    LOG_W(NR_RRC, "Xn-U forwarding complete: unknown UE rrc_ue_id=%lu\n", msg->ue_id);
-    return;
-  }
-  gNB_RRC_UE_t *UE = &ue_ctx->ue_context;
-  if (!UE->ho_context || !UE->ho_context->target) {
-    LOG_I(NR_RRC,
-          "UE %u: Xn-U forwarding complete for DRB %d (PDU session %d) after handover context already released — ignoring\n",
-          UE->rrc_ue_id,
-          msg->rb_id,
-          msg->pdusession_id);
-    return;
-  }
-
-  if (!ue_associated_to_cuup(UE)) {
-    LOG_W(NR_RRC, "UE %u: Xn-U forwarding complete for DRB %d, but no CU-UP associated\n", UE->rrc_ue_id, msg->rb_id);
-    return;
-  }
-
-  LOG_I(NR_RRC,
-        "UE %u: Xn-U DL forwarding complete for DRB %d (PDU session %d) — releasing tunnel\n",
-        UE->rrc_ue_id,
-        msg->rb_id,
-        msg->pdusession_id);
-
-  e1ap_bearer_mod_req_t req = {
-      .gNB_cu_cp_ue_id = UE->rrc_ue_id,
-      .gNB_cu_up_ue_id = UE->rrc_ue_id,
-      .numPDUSessionsMod = 1,
-  };
-  req.pduSessionMod = calloc_or_fail(1, sizeof(*req.pduSessionMod));
-  req.pduSessionMod[0].sessionId = msg->pdusession_id;
-  req.pduSessionMod[0].numDRB2Modify = 1;
-  req.pduSessionMod[0].DRBnGRanModList[0] = (DRB_nGRAN_to_mod_t){
-      .id = msg->rb_id,
-      .early_fwd_stop = true,
-  };
-  sctp_assoc_t assoc_id = get_existing_cuup_for_ue(UE);
-  rrc->cucp_cuup.bearer_context_mod(assoc_id, &req);
-  free_e1ap_context_mod_request(&req);
-}
-
 /** @brief Send Handover Preparation Failure (TS 38.423 §9.1.1.3) from target to source via Xn.
  *  xn_token is the one received in XNAP_HANDOVER_REQ; only valid before the Ack was sent. */
 void rrc_gNB_send_XNAP_HANDOVER_PREP_FAILURE(gNB_RRC_INST *rrc, uint32_t xn_token, xnap_cause_t cause)

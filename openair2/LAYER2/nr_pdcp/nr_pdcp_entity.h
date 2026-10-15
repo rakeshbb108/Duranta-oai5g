@@ -74,6 +74,12 @@ typedef struct nr_pdcp_fwd_sdu_s {
   char data[];
 } nr_pdcp_fwd_sdu_t;
 
+typedef struct {
+  nr_pdcp_fwd_sdu_t *head;
+  nr_pdcp_fwd_sdu_t *tail;
+  int count;
+} nr_pdcp_fwd_queue_t;
+
 typedef struct nr_pdcp_shadow_ring_s {
   nr_pdcp_shadow_sdu_t *head; /* oldest, evicted first when over cap */
   nr_pdcp_shadow_sdu_t *tail; /* newest */
@@ -235,12 +241,17 @@ typedef struct nr_pdcp_entity_s {
    * new DL SN is assigned and every DL SDU goes to the target through this. */
   nr_pdcp_forward_sdu_t forward_sdu;
   void *forward_sdu_data;
+  /* Xn HO source: End Marker sent, nothing more is forwarded */
+  bool forward_ended;
 
   /* Xn HO target: forwarded DL SDUs are held, in arrival order, while fwd_hold */
   bool fwd_hold;
-  nr_pdcp_fwd_sdu_t *fwd_held_head;
-  nr_pdcp_fwd_sdu_t *fwd_held_tail;
-  int fwd_held_count;
+  nr_pdcp_fwd_queue_t fwd_held;
+  /* Xn HO target: DL SDUs from NG-U are held while ngu_hold, until the forwarding End
+   * Marker (fwd_end) is received and the forwarded SDUs are sent */
+  bool ngu_hold;
+  bool fwd_end;
+  nr_pdcp_fwd_queue_t ngu_held;
 
 } nr_pdcp_entity_t;
 
@@ -258,6 +269,11 @@ bool nr_pdcp_entity_forwarded_count(const nr_pdcp_entity_t *entity, int sn, uint
 void nr_pdcp_entity_recv_forwarded_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, char *buf, int size, int sn);
 /* Xn HO target: SN status applied, send the held SDUs in arrival order and stop holding */
 void nr_pdcp_entity_release_forwarded(nr_pdcp_entity_t *entity, ue_id_t ue_id);
+/* Xn HO target: a DL SDU from NG-U; held while ngu_hold, else false (caller sends it) */
+bool nr_pdcp_entity_hold_ngu_sdu(nr_pdcp_entity_t *entity, ue_id_t ue_id, char *buf, int size);
+/* Xn HO target: forwarding End Marker received; once the forwarded SDUs are sent, the
+ * NG-U SDUs held so far are sent and NG-U is no longer held */
+void nr_pdcp_entity_forwarding_end_received(nr_pdcp_entity_t *entity, ue_id_t ue_id);
 
 /* Sibling to entity->process_sdu() that writes/ciphers using an explicit COUNT
  * instead of entity->tx_next, and does not advance tx_next. Used at the target

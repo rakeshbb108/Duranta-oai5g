@@ -69,6 +69,9 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
    *  sn is the PDCP SN from the PDCP PDU Number extension header, or -1 if absent */
   typedef void (*gtpCallbackFwd)(ue_id_t ue_id, int rb_id, uint8_t *buf, int len, int sn);
 
+  /** @brief End Marker received on a tunnel; rb_id is the tunnel's incoming bearer ID */
+  typedef void (*gtpCallbackEndMarker)(ue_id_t ue_id, int rb_id);
+
   /** @brief GTP callback payload (TS 23.527 clause 5.3.3.1) */
   typedef struct gtpv1u_error_indication_ind_s {
     instance_t gtp_instance;
@@ -144,6 +147,8 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
                                               teid_t newOutgoingTeid);
 
   void GtpuSetForwardedDataCallback(teid_t incoming_teid, gtpCallbackFwd callBackFwd);
+  void GtpuSetEndMarkerCallback(teid_t incoming_teid, gtpCallbackEndMarker endMarkerCallBack);
+  void gtpv1uSendEndMarker(instance_t instance, ue_id_t ue_id, int bearer_id);
   int newGtpuDeleteOneTunnel(instance_t instance, ue_id_t ue_id, int rb_id);
   int newGtpuDeleteAllTunnels(instance_t instance, ue_id_t ue_id);
 

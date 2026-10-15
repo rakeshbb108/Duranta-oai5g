@@ -52,6 +52,5 @@ int rrc_gNB_process_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc,
                                               instance_t instance,
                                               xnap_ue_context_release_t *msg);
 
-void rrc_gNB_process_XNU_FORWARDING_COMPLETE(gNB_RRC_INST *rrc, const gtpv1u_xnu_forwarding_complete_t *msg);
 
 #endif /* RRC_GNB_XNAP_H_ */

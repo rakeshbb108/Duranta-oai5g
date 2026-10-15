@@ -119,5 +119,8 @@ bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_forward_s
 void nr_pdcp_hold_forwarded(ue_id_t ue_id, rb_id_t rb_id);
 void nr_pdcp_release_forwarded(ue_id_t ue_id, rb_id_t rb_id);
 void nr_pdcp_forwarded_sdu(ue_id_t ue_id, int rb_id, uint8_t *buf, int size, int sn);
+void nr_pdcp_forwarding_end_received(ue_id_t ue_id, rb_id_t rb_id);
+bool nr_pdcp_ue_forwarding(ue_id_t ue_id);
+int nr_pdcp_end_dl_forwarding(ue_id_t ue_id, int pdusession_id, int drb_ids[MAX_DRBS_PER_UE]);
 
 #endif /* NR_PDCP_OAI_API_H */

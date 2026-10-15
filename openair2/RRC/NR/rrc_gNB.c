@@ -4198,10 +4198,6 @@ void *rrc_gnb_task(void *args_p)
         rrc_gNB_process_XNAP_HO_RELOCOVERALL_TIMEOUT(RC.nrrrc[instance], &XNAP_HO_RELOCOVERALL_TIMEOUT(msg_p));
         break;
 
-      case GTPV1U_XNU_FORWARDING_COMPLETE:
-        rrc_gNB_process_XNU_FORWARDING_COMPLETE(RC.nrrrc[instance], &GTPV1U_XNU_FORWARDING_COMPLETE(msg_p));
-        break;
-
       default:
         LOG_E(NR_RRC, "[gNB %ld] Received unexpected message %s\n", instance, msg_name_p);
         break;

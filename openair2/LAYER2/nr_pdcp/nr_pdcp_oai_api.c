@@ -668,11 +668,75 @@ uint64_t get_pdcp_optmask(void)
   return pdcp_optmask;
 }
 
+/* UE lookup that does not create the UE; call with the manager locked */
+static nr_pdcp_ue_t *find_ue(ue_id_t ue_id)
+{
+  nr_pdcp_ue_t **list = nr_pdcp_manager_get_ue_list(nr_pdcp_ue_manager);
+  int n = nr_pdcp_manager_get_ue_count(nr_pdcp_ue_manager);
+  for (int i = 0; i < n; i++)
+    if (list[i]->ue_id == ue_id)
+      return list[i];
+  return NULL;
+}
+
+/* Xn HO source: true if a DRB of the UE forwards and has not sent its End Marker yet */
+static bool ue_forwarding(const nr_pdcp_ue_t *ue)
+{
+  for (int i = 0; i < MAX_DRBS_PER_UE; i++)
+    if (ue->drb[i] && ue->drb[i]->forward_sdu && !ue->drb[i]->forward_ended)
+      return true;
+  return false;
+}
+
 void nr_pdcp_remove_UE(ue_id_t ue_id)
 {
   nr_pdcp_manager_lock(nr_pdcp_ue_manager);
-  nr_pdcp_manager_remove_ue(nr_pdcp_ue_manager, ue_id);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  if (ue && ue_forwarding(ue)) {
+    /* Xn HO source: DL forwarding goes on until the End Marker */
+    ue->remove_pending = true;
+    LOG_I(PDCP, "UE %lx: removal deferred until DL forwarding ends\n", ue_id);
+  } else {
+    nr_pdcp_manager_remove_ue(nr_pdcp_ue_manager, ue_id);
+  }
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief Xn HO source: true while a DRB of the UE forwards DL data without having sent
+ *  its End Marker */
+bool nr_pdcp_ue_forwarding(ue_id_t ue_id)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  bool ret = ue && ue_forwarding(ue);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+  return ret;
+}
+
+/** @brief Xn HO source: End Marker received from NG-U for a PDU session. Ends DL forwarding
+ *  of the session's forwarding DRBs (each only once) and completes a deferred UE removal.
+ *  @param drb_ids out: the DRBs that ended now, to send the End Marker on
+ *  @return number of entries in drb_ids */
+int nr_pdcp_end_dl_forwarding(ue_id_t ue_id, int pdusession_id, int drb_ids[MAX_DRBS_PER_UE])
+{
+  int n = 0;
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  if (ue) {
+    for (int i = 0; i < MAX_DRBS_PER_UE; i++) {
+      nr_pdcp_entity_t *rb = ue->drb[i];
+      if (rb && rb->pdusession_id == pdusession_id && rb->forward_sdu && !rb->forward_ended) {
+        rb->forward_ended = true;
+        drb_ids[n++] = rb->rb_id;
+      }
+    }
+    if (ue->remove_pending && !ue_forwarding(ue)) {
+      LOG_I(PDCP, "UE %lx: DL forwarding ended, removing deferred UE\n", ue_id);
+      nr_pdcp_manager_remove_ue(nr_pdcp_ue_manager, ue_id);
+    }
+  }
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+  return n;
 }
 
 void nr_pdcp_config_set_security(ue_id_t ue_id,
@@ -946,7 +1010,15 @@ bool nr_pdcp_data_req_drb(protocol_ctxt_t *ctxt_pP,
   if (rb->forward_sdu) {
     /* Xn HO source, DL frozen: fresh SDU to the target without SN, sent under the
      * lock so that it cannot overtake the backlog forwarded with SN */
-    rb->forward_sdu(rb->forward_sdu_data, ue_id, rb_id, (char *)sdu_buffer, sdu_buffer_size, -1, rb->sn_size);
+    if (!rb->forward_ended)
+      rb->forward_sdu(rb->forward_sdu_data, ue_id, rb_id, (char *)sdu_buffer, sdu_buffer_size, -1, rb->sn_size);
+    else
+      LOG_W(PDCP, "UE %lx DRB %ld: DL SDU after the End Marker was sent, dropped\n", ue_id, rb_id);
+    nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+    return 1;
+  }
+  /* Xn HO target: NG-U data waits for the end of DL forwarding */
+  if (nr_pdcp_entity_hold_ngu_sdu(rb, ue_id, (char *)sdu_buffer, sdu_buffer_size)) {
     nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
     return 1;
   }
@@ -1090,8 +1162,8 @@ void nr_pdcp_get_drb_count_values(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_count_t 
 bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_forward_sdu_t forward_sdu, void *data)
 {
   nr_pdcp_manager_lock(nr_pdcp_ue_manager);
-  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
-  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
   bool ok = rb != NULL && rb->forward_sdu == NULL;
   if (ok)
     nr_pdcp_entity_start_dl_forwarding(rb, ue_id, forward_sdu, data);
@@ -1104,12 +1176,14 @@ bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id, nr_pdcp_forward_s
 void nr_pdcp_hold_forwarded(ue_id_t ue_id, rb_id_t rb_id)
 {
   nr_pdcp_manager_lock(nr_pdcp_ue_manager);
-  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
-  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
-  if (rb)
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
+  if (rb) {
     rb->fwd_hold = true;
-  else
+    rb->ngu_hold = true;
+  } else {
     LOG_E(PDCP, "UE %lx: cannot hold forwarded data, DRB %ld not found\n", ue_id, rb_id);
+  }
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
 }
 
@@ -1117,10 +1191,21 @@ void nr_pdcp_hold_forwarded(ue_id_t ue_id, rb_id_t rb_id)
 void nr_pdcp_release_forwarded(ue_id_t ue_id, rb_id_t rb_id)
 {
   nr_pdcp_manager_lock(nr_pdcp_ue_manager);
-  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
-  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
   if (rb)
     nr_pdcp_entity_release_forwarded(rb, ue_id);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief Xn HO target: End Marker received on the DRB's Xn-U forwarding tunnel */
+void nr_pdcp_forwarding_end_received(ue_id_t ue_id, rb_id_t rb_id)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
+  if (rb)
+    nr_pdcp_entity_forwarding_end_received(rb, ue_id);
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
 }
 
@@ -1129,8 +1214,8 @@ void nr_pdcp_release_forwarded(ue_id_t ue_id, rb_id_t rb_id)
 void nr_pdcp_forwarded_sdu(ue_id_t ue_id, int rb_id, uint8_t *buf, int size, int sn)
 {
   nr_pdcp_manager_lock(nr_pdcp_ue_manager);
-  nr_pdcp_ue_t *ue = nr_pdcp_manager_get_ue(nr_pdcp_ue_manager, ue_id);
-  nr_pdcp_entity_t *rb = nr_pdcp_get_rb(ue, rb_id, false);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
   if (rb)
     nr_pdcp_entity_recv_forwarded_sdu(rb, ue_id, (char *)buf, size, sn);
   else

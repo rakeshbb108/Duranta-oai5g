@@ -204,6 +204,51 @@ static void test_target_hold_full_backlog(void)
   e->delete_entity(e);
 }
 
+/* target: NG-U SDUs wait for the forwarding End Marker and go after all forwarded SDUs */
+static void test_target_ngu_hold(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  e->fwd_hold = e->ngu_hold = true;
+  char f1 = 'f', f2 = 'g', n1 = 'n', n2 = 'o';
+  tx_n = 0;
+  CHECK(nr_pdcp_entity_hold_ngu_sdu(e, 1, &n1, 1));
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &f1, 1, 9);
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 0, .sn = 10}, 18);
+  nr_pdcp_entity_release_forwarded(e, 1);
+  CHECK(tx_n == 1 && tx_payload[0] == 'f');
+  /* forwarded without SN after the SN status: sent, NG-U still held */
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &f2, 1, -1);
+  CHECK(nr_pdcp_entity_hold_ngu_sdu(e, 1, &n2, 1));
+  CHECK(tx_n == 2 && tx_payload[1] == 'g');
+  nr_pdcp_entity_forwarding_end_received(e, 1);
+  CHECK(tx_n == 4 && tx_payload[2] == 'n' && tx_payload[3] == 'o');
+  CHECK(tx_count[1] == 10 && tx_count[2] == 11 && tx_count[3] == 12);
+  /* NG-U no longer held; a duplicate End Marker and a late forwarded SDU change nothing */
+  CHECK(!nr_pdcp_entity_hold_ngu_sdu(e, 1, &n1, 1));
+  nr_pdcp_entity_forwarding_end_received(e, 1);
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &f1, 1, -1);
+  CHECK(tx_n == 4);
+  e->delete_entity(e);
+}
+
+/* target: End Marker before the SN status: NG-U SDUs go right after the forwarded ones */
+static void test_target_end_before_sn_status(void)
+{
+  nr_pdcp_entity_t *e = new_drb(12);
+  e->fwd_hold = e->ngu_hold = true;
+  char f = 'f', n = 'n';
+  tx_n = 0;
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &f, 1, 3);
+  CHECK(nr_pdcp_entity_hold_ngu_sdu(e, 1, &n, 1));
+  nr_pdcp_entity_forwarding_end_received(e, 1);
+  CHECK(tx_n == 0);
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 0, .sn = 4}, 12);
+  nr_pdcp_entity_release_forwarded(e, 1);
+  CHECK(tx_n == 2 && tx_payload[0] == 'f' && tx_sn[0] == 3 && tx_payload[1] == 'n' && tx_sn[1] == 4);
+  CHECK(!e->ngu_hold);
+  e->delete_entity(e);
+}
+
 int main(void)
 {
   logInit();
@@ -213,6 +258,8 @@ int main(void)
   test_target_hold_and_count();
   test_target_count_window();
   test_target_hold_full_backlog();
+  test_target_ngu_hold();
+  test_target_end_before_sn_status();
   printf("pdcp_forwarding_tests: OK\n");
   return 0;
 }
