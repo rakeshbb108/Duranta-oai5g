@@ -650,8 +650,10 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
       // Early Data Forwarding Indicator: stop Xn HO DL forwarding for this DRB now
       // (TS 38.463 clause 9.3.1.51), instead of waiting for UE Context Release
       if (to_modif->early_fwd_stop) {
-        /* Xn HO source, handover cancelled: resume DL transmission of the frozen DRB */
+        /* Xn HO source, handover cancelled: resume DL transmission of the frozen DRB;
+         * target: no more forwarded data, NG-U data needs not wait for an End Marker */
         nr_pdcp_stop_dl_forwarding(req->gNB_cu_up_ue_id, to_modif->id);
+        nr_pdcp_forwarding_end_received(req->gNB_cu_up_ue_id, to_modif->id);
         e1_remove_xnu_tunnel(req->gNB_cu_up_ue_id, to_modif->id);
       }
 
@@ -744,33 +746,24 @@ static bool take_release_pending(uint32_t ue_id)
 }
 
 /** @brief Xn HO source: End Marker from the UPF on the N3 tunnel of a PDU session, after
- *  the G-PDUs received before it were forwarded (same receive thread). Send an End
- *  Marker on the Xn-U tunnel of each forwarding DRB of the session, then release a UE
- *  whose release was deferred for forwarding. */
+ *  the G-PDUs received before it were forwarded (same receive thread). The session's
+ *  forwarding DRBs end forwarding after a short grace period for DL SDUs the UPF sent
+ *  before its End Marker but that arrive after it (xnu_forward_timeout()). */
 static void n3_end_marker(ue_id_t ue_id, int pdusession_id)
 {
-  int drb_ids[MAX_DRBS_PER_UE];
-  int n = nr_pdcp_end_dl_forwarding(ue_id, pdusession_id, drb_ids);
-  instance_t xnuinst = get_xnu_gtp_instance();
-  for (int i = 0; i < n; i++) {
-    LOG_I(GTPU, "UE %lx DRB %d: End Marker on the Xn-U forwarding tunnel\n", ue_id, drb_ids[i]);
-    gtpv1uSendEndMarker(xnuinst, ue_id, drb_ids[i]);
-    e1_remove_xnu_tunnel(ue_id, drb_ids[i]);
-  }
-  if (take_release_pending(ue_id)) {
-    LOG_I(E1AP, "UE %lx: DL forwarding ended, releasing deferred UE\n", ue_id);
-    remove_ue_e1(ue_id);
-  }
+  int n = nr_pdcp_end_dl_forwarding_after_grace(ue_id, pdusession_id);
+  if (n > 0)
+    LOG_I(GTPU, "UE %lx: UPF End Marker for PDU session %d, ending forwarding of %d DRB(s)\n", ue_id, pdusession_id, n);
 }
 
-/** @brief Xn HO source: forwarding guard of a DRB expired without UPF End Marker. End its
- *  forwarding as on the End Marker, so that the target stops holding NG-U data, and
- *  release a UE whose release was deferred for forwarding. */
+/** @brief Xn HO source: forwarding of a DRB ends, after the UPF End Marker grace period or
+ *  when its guard expired without UPF End Marker. End Marker on the Xn-U tunnel, so that
+ *  the target stops holding NG-U data, and release a UE whose release was deferred. */
 static void xnu_forward_timeout(void *data, ue_id_t ue_id, int drb_id)
 {
   if (!nr_pdcp_end_dl_forwarding_drb(ue_id, drb_id))
     return;
-  LOG_W(GTPU, "UE %lx DRB %d: forwarding guard expired, End Marker on the Xn-U forwarding tunnel\n", ue_id, drb_id);
+  LOG_I(GTPU, "UE %lx DRB %d: End Marker on the Xn-U forwarding tunnel\n", ue_id, drb_id);
   gtpv1uSendEndMarker(get_xnu_gtp_instance(), ue_id, drb_id);
   e1_remove_xnu_tunnel(ue_id, drb_id);
   if (take_release_pending(ue_id)) {

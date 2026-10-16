@@ -714,10 +714,6 @@ bool nr_pdcp_ue_forwarding(ue_id_t ue_id)
   return ret;
 }
 
-/** @brief Xn HO source: End Marker received from NG-U for a PDU session. Ends DL forwarding
- *  of the session's forwarding DRBs (each only once) and completes a deferred UE removal.
- *  @param drb_ids out: the DRBs that ended now, to send the End Marker on
- *  @return number of entries in drb_ids */
 /* completes a removal deferred for forwarding once no DRB forwards; call with the lock */
 static void remove_if_pending(nr_pdcp_ue_t *ue)
 {
@@ -727,26 +723,29 @@ static void remove_if_pending(nr_pdcp_ue_t *ue)
   }
 }
 
-int nr_pdcp_end_dl_forwarding(ue_id_t ue_id, int pdusession_id, int drb_ids[MAX_DRBS_PER_UE])
+/** @brief Xn HO source: End Marker received from NG-U for a PDU session. The forwarding DRBs
+ *  of the session keep forwarding the DL SDUs still arriving for NR_PDCP_FWD_END_MARKER_GRACE_MS;
+ *  then the PDCP timer reports them through forward_timeout, which ends their forwarding.
+ *  @return number of DRBs entering the grace period now (a repeated End Marker gives 0) */
+int nr_pdcp_end_dl_forwarding_after_grace(ue_id_t ue_id, int pdusession_id)
 {
   int n = 0;
+  uint64_t now = nr_pdcp_current_time();
   nr_pdcp_manager_lock(nr_pdcp_ue_manager);
   nr_pdcp_ue_t *ue = find_ue(ue_id);
-  if (ue) {
-    for (int i = 0; i < MAX_DRBS_PER_UE; i++) {
-      nr_pdcp_entity_t *rb = ue->drb[i];
-      if (rb && rb->pdusession_id == pdusession_id && rb->forward_sdu && !rb->forward_ended) {
-        rb->forward_ended = true;
-        drb_ids[n++] = rb->rb_id;
-      }
+  for (int i = 0; ue && i < MAX_DRBS_PER_UE; i++) {
+    nr_pdcp_entity_t *rb = ue->drb[i];
+    if (rb && rb->pdusession_id == pdusession_id && rb->forward_sdu && !rb->forward_ended && !rb->forward_grace) {
+      rb->forward_grace = true;
+      rb->forward_grace_start = now;
+      n++;
     }
-    remove_if_pending(ue);
   }
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
   return n;
 }
 
-/** @brief Xn HO source: end DL forwarding of one DRB without UPF End Marker (guard timer)
+/** @brief Xn HO source: end DL forwarding of one DRB (End Marker grace over, or guard)
  *  @return true if the DRB was forwarding: the End Marker is to be sent on its tunnel */
 bool nr_pdcp_end_dl_forwarding_drb(ue_id_t ue_id, rb_id_t rb_id)
 {

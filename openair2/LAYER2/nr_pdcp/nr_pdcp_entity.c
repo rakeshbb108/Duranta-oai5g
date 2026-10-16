@@ -152,6 +152,7 @@ void nr_pdcp_entity_stop_dl_forwarding(nr_pdcp_entity_t *entity)
   entity->forward_ended = false;
   entity->forward_timed_out = false;
   entity->forward_timeout = NULL;
+  entity->forward_grace = false;
 }
 
 bool nr_pdcp_entity_forwarded_count(const nr_pdcp_entity_t *entity, int sn, uint32_t *count)
@@ -310,6 +311,11 @@ static bool elapsed(uint64_t now, uint64_t start, uint64_t ms)
 
 void nr_pdcp_entity_check_forwarding_guards(nr_pdcp_entity_t *entity, uint64_t now)
 {
+  if (entity->forward_sdu && !entity->forward_ended && !entity->forward_timed_out && entity->forward_grace
+      && elapsed(now, entity->forward_grace_start, NR_PDCP_FWD_END_MARKER_GRACE_MS)) {
+    LOG_D(PDCP, "DRB %d: End Marker grace over, ending forwarding\n", entity->rb_id);
+    entity->forward_timed_out = true;
+  }
   if (entity->forward_sdu && !entity->forward_ended && !entity->forward_timed_out
       && elapsed(now, entity->forward_start, NR_PDCP_FWD_SOURCE_GUARD_MS)) {
     LOG_W(PDCP,

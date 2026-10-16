@@ -60,6 +60,9 @@ typedef struct {
  * cannot be numbered, are dropped) and until the forwarding End Marker (else NG-U data is
  * released anyway). */
 #define NR_PDCP_FWD_SOURCE_GUARD_MS 2000
+/* Xn HO source: after the UPF End Marker, DL SDUs still arriving within this time (UPF
+ * reordering End Marker and data, seen within ~1 ms) are forwarded before the End Marker */
+#define NR_PDCP_FWD_END_MARKER_GRACE_MS 10
 #define NR_PDCP_FWD_TARGET_GUARD_MS 2000
 
 typedef struct nr_pdcp_shadow_sdu_s {
@@ -259,6 +262,10 @@ typedef struct nr_pdcp_entity_s {
   uint64_t forward_start;
   bool forward_timed_out;
   nr_pdcp_forward_timeout_t forward_timeout;
+  /* Xn HO source: UPF End Marker received at forward_grace_start; forwarding ends after
+   * NR_PDCP_FWD_END_MARKER_GRACE_MS, reported like the guard (forward_timed_out) */
+  bool forward_grace;
+  uint64_t forward_grace_start;
 
   /* Xn HO target: forwarded DL SDUs are held, in arrival order, while fwd_hold */
   bool fwd_hold;

@@ -695,22 +695,8 @@ void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 
   LOG_I(NR_RRC, "UE %u: sending XNAP UE Context Release to source gNB\n", UE->rrc_ue_id);
 
-  /* Xn-U forwarding tunnels are keyed by DRB id, not PDU session id: release
-   * every DRB of an established session that has an armed forwarding tunnel. */
-  int n_xnu = 0;
-  int xnu_drb_ids[MAX_DRBS_PER_UE];
-  FOR_EACH_SEQ_ARR(drb_t *, drb, &UE->drbs) {
-    if (drb->dl_fwd_cuup_tnl.teid == 0)
-      continue;
-    rrc_pdu_session_param_t *p = find_pduSession(&UE->pduSessions, drb->pdusession_id);
-    if (p == NULL || p->status != PDU_SESSION_STATUS_ESTABLISHED)
-      continue;
-    if (n_xnu >= MAX_DRBS_PER_UE)
-      break;
-    xnu_drb_ids[n_xnu++] = drb->drb_id;
-  }
-  rrc_gNB_stop_xnu_forwarding(rrc, UE, xnu_drb_ids, n_xnu);
-
+  /* DL forwarding goes on after the path switch, until the source's End Marker on each DRB
+   * (or the CU-UP guard): the target CU-UP ends it, not the path switch */
   xnap_ue_context_release_t msg = {.rrc_ue_id = UE->rrc_ue_id};
 
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_UE_CONTEXT_RELEASE);

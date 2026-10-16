@@ -354,6 +354,22 @@ static void test_source_stop_forwarding(void)
   e->delete_entity(e);
 }
 
+/* source: after the UPF End Marker, forwarding goes on for the grace period, then the DRB
+ * is reported for its End Marker (forward_timed_out); without End Marker, only the guard */
+static void test_source_end_marker_grace(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  e->forward_start = 1000;
+  e->forward_grace = true;
+  e->forward_grace_start = 1500;
+  e->set_time(e, 1500 + NR_PDCP_FWD_END_MARKER_GRACE_MS - 1);
+  CHECK(!e->forward_timed_out && e->forward_sdu == forward_sdu);
+  e->set_time(e, 1500 + NR_PDCP_FWD_END_MARKER_GRACE_MS);
+  CHECK(e->forward_timed_out);
+  e->delete_entity(e);
+}
+
 int main(void)
 {
   logInit();
@@ -370,6 +386,7 @@ int main(void)
   test_target_guard_no_end_marker();
   test_delivered_up_to_sn();
   test_source_stop_forwarding();
+  test_source_end_marker_grace();
   printf("pdcp_forwarding_tests: OK\n");
   return 0;
 }
