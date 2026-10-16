@@ -357,6 +357,21 @@ void nr_pdcp_shadow_ring_free(nr_pdcp_shadow_ring_t *ring)
   free(ring);
 }
 
+/* PDCP control PDU (TS 38.323 6.2.3): D/C = 0, PDU type in the 3 bits after it. A PDCP
+ * status report (type 000: FMC on 4 octets, then a bitmap) is only logged, as
+ * statusReportRequired is not configured; other types are not supported. */
+#define NR_PDCP_CONTROL_PDU_STATUS_REPORT 0
+static void nr_pdcp_entity_recv_control_pdu(nr_pdcp_entity_t *entity, const unsigned char *buffer, int size)
+{
+  int pdu_type = (buffer[0] >> 4) & 0x07;
+  if (pdu_type == NR_PDCP_CONTROL_PDU_STATUS_REPORT && size >= 5) {
+    uint32_t fmc = (uint32_t)buffer[1] << 24 | buffer[2] << 16 | buffer[3] << 8 | buffer[4];
+    LOG_I(PDCP, "DRB %d: PDCP status report received, FMC %u, %d bitmap octets (ignored)\n", entity->rb_id, fmc, size - 5);
+    return;
+  }
+  LOG_W(PDCP, "DRB %d: PDCP control PDU type %d (%d bytes) not supported, dropped\n", entity->rb_id, pdu_type, size);
+}
+
 static void nr_pdcp_entity_recv_pdu(nr_pdcp_entity_t *entity,
                                     char *_buffer, int size)
 {
@@ -384,14 +399,10 @@ static void nr_pdcp_entity_recv_pdu(nr_pdcp_entity_t *entity,
     return;
   }
 
+  /* DRB PDU with D/C = 0: control PDU, never user data */
   if (entity->type != NR_PDCP_SRB && !(buffer[0] & 0x80)) {
-    LOG_E(PDCP, "%s:%d:%s: fatal\n", __FILE__, __LINE__, __FUNCTION__);
-    /* TODO: This is something of a hack. The most significant bit
-       in buffer[0] should be 1 if the packet is a data packet. We are
-       processing malformed data packets if the most significant bit
-       is 0. Rather than exit(1), this hack allows us to continue for now.
-       We need to investigate why this hack is neccessary. */
-    buffer[0] |= 128;
+    nr_pdcp_entity_recv_control_pdu(entity, buffer, size);
+    return;
   }
   entity->stats.rxpdu_pkts++;
   entity->stats.rxpdu_bytes += size;

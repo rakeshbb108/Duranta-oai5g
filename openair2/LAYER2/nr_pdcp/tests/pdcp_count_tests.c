@@ -122,6 +122,30 @@ static void test_ul_count(int sn_size)
   e->delete_entity(e);
 }
 
+/* DRB PDUs with D/C = 0 are PDCP control PDUs (status report, ROHC feedback): nothing is
+ * delivered and the RX state does not move */
+static void test_control_pdu(int sn_size)
+{
+  nr_pdcp_entity_t *e = new_drb(sn_size);
+  delivered_count = 0;
+  uint8_t status_report[] = {0x00, 0x00, 0x00, 0x00, 0x05, 0xff};
+  e->recv_pdu(e, (char *)status_report, sizeof(status_report));
+  uint8_t rohc_feedback[] = {0x10, 0x12, 0x34};
+  e->recv_pdu(e, (char *)rohc_feedback, sizeof(rohc_feedback));
+  uint8_t short_report[] = {0x00, 0x01};
+  e->recv_pdu(e, (char *)short_report, sizeof(short_report));
+  CHECK(delivered_count == 0);
+  nr_pdcp_count_t ul = e->get_pdcp_count_ul(e);
+  CHECK(ul.hfn == 0 && ul.sn == 0);
+
+  /* data still goes through */
+  uint8_t pdu[16];
+  int len = build_ul_pdu(pdu, sn_size, 0, "abc", 4);
+  e->recv_pdu(e, (char *)pdu, len);
+  CHECK(delivered_count == 1 && strcmp(delivered_buf, "abc") == 0);
+  e->delete_entity(e);
+}
+
 int main(void)
 {
   logInit();
@@ -129,6 +153,8 @@ int main(void)
   test_dl_count(18);
   test_ul_count(12);
   test_ul_count(18);
+  test_control_pdu(12);
+  test_control_pdu(18);
   printf("pdcp_count_tests: OK\n");
   return 0;
 }
