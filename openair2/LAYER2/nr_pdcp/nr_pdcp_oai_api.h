@@ -121,6 +121,7 @@ bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id,
                                  nr_pdcp_forward_timeout_t forward_timeout,
                                  void *data);
 bool nr_pdcp_end_dl_forwarding_drb(ue_id_t ue_id, rb_id_t rb_id);
+bool nr_pdcp_stop_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id);
 void nr_pdcp_hold_forwarded(ue_id_t ue_id, rb_id_t rb_id);
 void nr_pdcp_release_forwarded(ue_id_t ue_id, rb_id_t rb_id);
 void nr_pdcp_forwarded_sdu(ue_id_t ue_id, int rb_id, uint8_t *buf, int size, int sn);

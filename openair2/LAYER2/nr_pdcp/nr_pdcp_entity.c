@@ -145,6 +145,15 @@ void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id,
         n);
 }
 
+void nr_pdcp_entity_stop_dl_forwarding(nr_pdcp_entity_t *entity)
+{
+  entity->forward_sdu = NULL;
+  entity->forward_sdu_data = NULL;
+  entity->forward_ended = false;
+  entity->forward_timed_out = false;
+  entity->forward_timeout = NULL;
+}
+
 bool nr_pdcp_entity_forwarded_count(const nr_pdcp_entity_t *entity, int sn, uint32_t *count)
 {
   if (sn < 0 || sn > entity->sn_max)

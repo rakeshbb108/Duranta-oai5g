@@ -671,6 +671,23 @@ static void rrc_gNB_stop_xnu_forwarding(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE, con
   free_e1ap_context_mod_request(&req);
 }
 
+/** @brief Xn HO source, handover cancelled: the CU-UP stops DL forwarding of the DRBs that
+ *  got a forwarding tunnel from the target and resumes DL transmission on them */
+void rrc_gNB_xn_source_cancel_forwarding(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
+{
+  int drb_ids[MAX_DRBS_PER_UE];
+  int n = 0;
+  FOR_EACH_SEQ_ARR (drb_t *, drb, &UE->drbs) {
+    if (drb->dl_fwd_tnl.teid == 0)
+      continue;
+    drb_ids[n++] = drb->drb_id;
+    drb->dl_fwd_tnl = (gtpu_tunnel_t){0};
+  }
+  if (n > 0)
+    LOG_I(NR_RRC, "UE %u: Xn HO cancelled, stopping DL forwarding of %d DRB(s)\n", UE->rrc_ue_id, n);
+  rrc_gNB_stop_xnu_forwarding(rrc, UE, drb_ids, n);
+}
+
 void rrc_gNB_send_XNAP_UE_CONTEXT_RELEASE(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
 {
   AssertFatal(UE->ho_context != NULL, "UE %u: ho_context is NULL\n", UE->rrc_ue_id);

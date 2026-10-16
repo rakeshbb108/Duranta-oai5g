@@ -278,6 +278,9 @@ typedef struct nr_pdcp_entity_s {
  * ring is passed to forward_sdu with its PDCP SN, in ascending COUNT order; later
  * DL SDUs are to be passed to forward_sdu without SN by the caller of process_sdu. */
 void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id, nr_pdcp_forward_sdu_t forward_sdu, void *data);
+/* Xn HO source, handover cancelled: DL is no longer frozen, SDUs go to the lower layers from
+ * TX_NEXT on again. The SDUs already forwarded are not sent again. */
+void nr_pdcp_entity_stop_dl_forwarding(nr_pdcp_entity_t *entity);
 
 /* Xn HO target: COUNT of a forwarded SDU with PDCP SN sn. The source forwards with SN
  * only SDUs it numbered before the DL COUNT it reported, now TX_NEXT: the COUNT is the

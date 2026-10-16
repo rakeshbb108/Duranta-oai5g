@@ -812,6 +812,9 @@ static void nr_rrc_xn_ho_cancel(gNB_RRC_INST *rrc, gNB_RRC_UE_t *UE)
   MessageDef *msg_p = itti_alloc_new_message(TASK_RRC_GNB, 0, XNAP_HANDOVER_CANCEL);
   XNAP_HANDOVER_CANCEL(msg_p) = msg;
   itti_send_msg_to_task(TASK_XNAP, rrc->module_id, msg_p);
+
+  /* DL may already be frozen and forwarded to the target: resume it here */
+  rrc_gNB_xn_source_cancel_forwarding(rrc, UE);
 }
 
 /** @brief true if this handover context belongs to an Xn handover (source or target role) */

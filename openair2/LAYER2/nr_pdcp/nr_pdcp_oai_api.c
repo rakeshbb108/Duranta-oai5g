@@ -1203,6 +1203,22 @@ bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id,
   return ok;
 }
 
+/** @brief Xn HO source, handover cancelled: resume DL transmission of a frozen DRB
+ *  @return true if the DRB was forwarding */
+bool nr_pdcp_stop_dl_forwarding(ue_id_t ue_id, rb_id_t rb_id)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
+  bool was_forwarding = rb && rb->forward_sdu;
+  if (was_forwarding) {
+    nr_pdcp_entity_stop_dl_forwarding(rb);
+    LOG_I(PDCP, "UE %lx DRB %ld: DL forwarding cancelled, DL resumes at TX_NEXT %u\n", ue_id, rb_id, rb->tx_next);
+  }
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+  return was_forwarding;
+}
+
 /** @brief Xn HO target: hold the DL SDUs forwarded on this DRB until
  *  nr_pdcp_release_forwarded(), i.e. until the source SN status is applied */
 void nr_pdcp_hold_forwarded(ue_id_t ue_id, rb_id_t rb_id)

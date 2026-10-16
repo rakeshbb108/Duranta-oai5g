@@ -334,6 +334,26 @@ static void test_delivered_up_to_sn(void)
   e->delete_entity(e);
 }
 
+/* source: handover cancelled after the freeze: DL is not forwarded anymore, the guard is off,
+ * and new SDUs are numbered from TX_NEXT and kept for a later handover */
+static void test_source_stop_forwarding(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  send_sdu(e, 0);
+  nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  e->forward_start = 1000;
+  nr_pdcp_entity_stop_dl_forwarding(e);
+  CHECK(e->forward_sdu == NULL && !e->forward_ended);
+  e->set_time(e, 1000 + 10 * NR_PDCP_FWD_SOURCE_GUARD_MS);
+  CHECK(!e->forward_timed_out);
+  CHECK(send_sdu(e, 1) == 1 && e->shadow_ring->count == 1);
+  /* a new handover can start */
+  fwd_n = 0;
+  nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  CHECK(fwd_n == 1 && fwd_sn[0] == 1);
+  e->delete_entity(e);
+}
+
 int main(void)
 {
   logInit();
@@ -349,6 +369,7 @@ int main(void)
   test_target_guard_no_sn_status();
   test_target_guard_no_end_marker();
   test_delivered_up_to_sn();
+  test_source_stop_forwarding();
   printf("pdcp_forwarding_tests: OK\n");
   return 0;
 }

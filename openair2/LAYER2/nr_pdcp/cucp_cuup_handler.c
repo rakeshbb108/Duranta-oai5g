@@ -649,8 +649,11 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
 
       // Early Data Forwarding Indicator: stop Xn HO DL forwarding for this DRB now
       // (TS 38.463 clause 9.3.1.51), instead of waiting for UE Context Release
-      if (to_modif->early_fwd_stop)
+      if (to_modif->early_fwd_stop) {
+        /* Xn HO source, handover cancelled: resume DL transmission of the frozen DRB */
+        nr_pdcp_stop_dl_forwarding(req->gNB_cu_up_ue_id, to_modif->id);
         e1_remove_xnu_tunnel(req->gNB_cu_up_ue_id, to_modif->id);
+      }
 
       if (f1inst < 0) // no F1-U?
         continue; // nothing to do
