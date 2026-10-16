@@ -93,6 +93,7 @@ static void cuup_release_pdu_session_up(uint32_t ue_id, int pdusession_id);
 static void n3_end_marker(ue_id_t ue_id, int pdusession_id);
 static void xnu_fwd_end_marker(ue_id_t ue_id, int drb_id);
 static void xnu_forward_timeout(void *data, ue_id_t ue_id, int drb_id);
+static bool end_ue_forwarding_now(uint32_t ue_id);
 
 /** @brief N3 GTP-U Error Indication callback (TS 29.281 clause 7.3.1)
  * TS 23.527 clause 5.3.3.1: 5G-AN shall release PDU session resources immediately
@@ -292,6 +293,11 @@ void e1_bearer_context_setup(const e1ap_bearer_setup_req_t *req)
 
   /* mirror the CU-CP UE ID for CU-UP */
   uint32_t cu_up_ue_id = req->gNB_cu_cp_ue_id;
+  /* the ID may still belong to a released UE forwarding DL data (Xn HO source): end that first */
+  if (nr_pdcp_ue_forwarding(cu_up_ue_id)) {
+    LOG_W(E1AP, "UE %u: new bearer context while the previous UE with this ID still forwards DL data\n", cu_up_ue_id);
+    end_ue_forwarding_now(cu_up_ue_id);
+  }
   f1_ue_data_t ued = {.secondary_ue = req->gNB_cu_cp_ue_id};
   if (need_ue_id_mgmt && !cu_exists_f1_ue_data(cu_up_ue_id)) {
     bool success = cu_add_f1_ue_data(cu_up_ue_id, &ued);
@@ -756,20 +762,43 @@ static void n3_end_marker(ue_id_t ue_id, int pdusession_id)
     LOG_I(GTPU, "UE %lx: UPF End Marker for PDU session %d, ending forwarding of %d DRB(s)\n", ue_id, pdusession_id, n);
 }
 
+/* Xn HO source: ends forwarding of the DRB if it forwards: End Marker, tunnel removed */
+static bool end_drb_forwarding(ue_id_t ue_id, int drb_id)
+{
+  if (!nr_pdcp_end_dl_forwarding_drb(ue_id, drb_id))
+    return false;
+  LOG_I(GTPU, "UE %lx DRB %d: End Marker on the Xn-U forwarding tunnel\n", ue_id, drb_id);
+  gtpv1uSendEndMarker(get_xnu_gtp_instance(), ue_id, drb_id);
+  e1_remove_xnu_tunnel(ue_id, drb_id);
+  return true;
+}
+
 /** @brief Xn HO source: forwarding of a DRB ends, after the UPF End Marker grace period or
  *  when its guard expired without UPF End Marker. End Marker on the Xn-U tunnel, so that
  *  the target stops holding NG-U data, and release a UE whose release was deferred. */
 static void xnu_forward_timeout(void *data, ue_id_t ue_id, int drb_id)
 {
-  if (!nr_pdcp_end_dl_forwarding_drb(ue_id, drb_id))
+  if (!end_drb_forwarding(ue_id, drb_id))
     return;
-  LOG_I(GTPU, "UE %lx DRB %d: End Marker on the Xn-U forwarding tunnel\n", ue_id, drb_id);
-  gtpv1uSendEndMarker(get_xnu_gtp_instance(), ue_id, drb_id);
-  e1_remove_xnu_tunnel(ue_id, drb_id);
   if (take_release_pending(ue_id)) {
     LOG_I(E1AP, "UE %lx: DL forwarding ended, releasing deferred UE\n", ue_id);
     remove_ue_e1(ue_id);
   }
+}
+
+/** @brief Xn HO source: end the DL forwarding of all DRBs of the UE now (End Marker on each
+ *  Xn-U tunnel, so that the target does not wait for its guard), and release the UE if
+ *  its release was deferred. For an E1 reset, and for a CU UE ID used again.
+ *  @return true if the UE was released */
+static bool end_ue_forwarding_now(uint32_t ue_id)
+{
+  for (int drb_id = 1; drb_id <= MAX_DRBS_PER_UE; drb_id++)
+    end_drb_forwarding(ue_id, drb_id);
+  if (!take_release_pending(ue_id))
+    return false;
+  LOG_I(E1AP, "UE %u: DL forwarding ended, releasing deferred UE\n", ue_id);
+  remove_ue_e1(ue_id);
+  return true;
 }
 
 /** @brief Xn HO target: End Marker on a DRB's Xn-U forwarding tunnel, after the forwarded
@@ -815,7 +844,9 @@ void e1_reset(void)
   for (uint32_t i = 0; i < num; ++i) {
     ue_id_t ue_id = ue_ids[i];
     LOG_W(E1AP, "releasing UE %ld\n", ue_id);
-    remove_ue_e1(ue_id);
+    /* a UE still forwarding DL data (Xn HO source) is not kept */
+    if (!end_ue_forwarding_now(ue_id))
+      remove_ue_e1(ue_id);
   }
 }
 
