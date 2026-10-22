@@ -139,9 +139,12 @@ def merge_row(src, tgt, cuup_rows):
         first_tx_by_drb = {int(r["drb_id"]): (int(r["sn"]), int(r["wall_ns"])) for r in window_rows}
         dl_count_sn = parse_drb_list_u32(src.get("dl_count_sn", ""))
 
+        # With lossless Xn-U the forwarded backlog can reach the target's
+        # RLC before the UE completes RA there (T4); it cannot be received
+        # earlier than that, so clamp the end of the interruption to T4.
         if first_tx_by_drb and t3_wall:
             earliest_drb = min(first_tx_by_drb, key=lambda d: first_tx_by_drb[d][1])
-            out["interruption_ms"] = ms(first_tx_by_drb[earliest_drb][1] - t3_wall)
+            out["interruption_ms"] = ms(max(first_tx_by_drb[earliest_drb][1], t4_wall) - t3_wall)
 
         total_lost = 0
         any_estimate = False

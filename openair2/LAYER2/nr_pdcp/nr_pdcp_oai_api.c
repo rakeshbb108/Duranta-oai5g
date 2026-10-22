@@ -433,6 +433,70 @@ static void deliver_sdu_drb(void *_ue, nr_pdcp_entity_t *entity,
   }
 }
 
+/* Xn HO latency instrumentation: records the first DL PDCP PDU actually
+ * handed to RLC/F1-U for a (UE, DRB) after (re)activation, fresh or
+ * forwarded over Xn-U -- the practical end
+ * of the user-plane interruption window -- and appends it directly to this
+ * (CU-UP, in a split deployment) process's own CSV, since the CU-CP/RRC
+ * process that owns the rest of the Xn HO latency record runs separately
+ * and cannot poll an in-memory table here. Joined back to the target's row
+ * downstream by rrc_ue_id (see common/utils/xn_ho_latency.h for why that's
+ * safe to use as the join key). Armed unconditionally on every DRB
+ * creation; harmless extra CSV row for non-HO DRB setups. */
+#define XN_HO_FIRST_TX_MAX_SLOTS 64
+typedef struct {
+  bool in_use;
+  ue_id_t ue_id;
+  rb_id_t rb_id;
+} xn_ho_first_tx_slot_t;
+
+static xn_ho_first_tx_slot_t xn_ho_first_tx_slots[XN_HO_FIRST_TX_MAX_SLOTS];
+static pthread_mutex_t xn_ho_first_tx_lock = PTHREAD_MUTEX_INITIALIZER;
+static int xn_ho_first_tx_pending;
+
+static void xn_ho_pdcp_arm_first_tx(ue_id_t ue_id, rb_id_t rb_id)
+{
+  pthread_mutex_lock(&xn_ho_first_tx_lock);
+  int free_slot = -1;
+  for (int i = 0; i < XN_HO_FIRST_TX_MAX_SLOTS; i++) {
+    if (xn_ho_first_tx_slots[i].in_use && xn_ho_first_tx_slots[i].ue_id == ue_id && xn_ho_first_tx_slots[i].rb_id == rb_id) {
+      pthread_mutex_unlock(&xn_ho_first_tx_lock);
+      return; /* already armed, waiting for its first PDU */
+    }
+    if (free_slot < 0 && !xn_ho_first_tx_slots[i].in_use)
+      free_slot = i;
+  }
+  if (free_slot >= 0) {
+    xn_ho_first_tx_slots[free_slot] = (xn_ho_first_tx_slot_t){.in_use = true, .ue_id = ue_id, .rb_id = rb_id};
+    xn_ho_first_tx_pending++;
+  }
+  pthread_mutex_unlock(&xn_ho_first_tx_lock);
+}
+
+static void xn_ho_pdcp_capture_first_tx(ue_id_t ue_id, rb_id_t rb_id, uint32_t sn)
+{
+  if (xn_ho_first_tx_pending == 0)
+    return;
+  bool armed = false;
+  pthread_mutex_lock(&xn_ho_first_tx_lock);
+  for (int i = 0; i < XN_HO_FIRST_TX_MAX_SLOTS; i++) {
+    xn_ho_first_tx_slot_t *s = &xn_ho_first_tx_slots[i];
+    if (s->in_use && s->ue_id == ue_id && s->rb_id == rb_id) {
+      s->in_use = false;
+      xn_ho_first_tx_pending--;
+      armed = true;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&xn_ho_first_tx_lock);
+  if (!armed)
+    return;
+
+  xn_ho_cuup_first_tx_record_t rec = {.rrc_ue_id = (uint32_t) ue_id, .drb_id = (int) rb_id, .sn = sn};
+  xn_ho_ts_mark(&rec.first_tx);
+  xn_ho_latency_append_cuup_first_tx(&rec);
+}
+
 static void deliver_pdu_drb_ue(void *deliver_pdu_data, ue_id_t ue_id, int rb_id,
                                char *buf, int size, int sdu_id)
 {
@@ -449,6 +513,8 @@ static void deliver_pdu_drb_gnb(void *deliver_pdu_data, ue_id_t ue_id, int rb_id
                                 char *buf, int size, int sdu_id)
 {
   DevAssert(deliver_pdu_data == NULL);
+  /* sdu_id is the PDU's PDCP COUNT */
+  xn_ho_pdcp_capture_first_tx(ue_id, rb_id, (uint32_t)sdu_id);
   f1_ue_data_t ue_data = cu_get_f1_ue_data(ue_id);
   protocol_ctxt_t ctxt = { .enb_flag = 1, .rntiMaybeUEid = ue_data.secondary_ue };
 
@@ -562,69 +628,6 @@ void add_srb(int is_gnb,
     LOG_D(PDCP, "added srb %d to UE ID %ld\n", srb_id, UEid);
   }
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
-}
-
-/* Xn HO latency instrumentation: records the first DL PDCP PDU actually
- * handed to RLC for a (UE, DRB) after (re)activation -- the practical end
- * of the user-plane interruption window -- and appends it directly to this
- * (CU-UP, in a split deployment) process's own CSV, since the CU-CP/RRC
- * process that owns the rest of the Xn HO latency record runs separately
- * and cannot poll an in-memory table here. Joined back to the target's row
- * downstream by rrc_ue_id (see common/utils/xn_ho_latency.h for why that's
- * safe to use as the join key). Armed unconditionally on every DRB
- * creation; harmless extra CSV row for non-HO DRB setups. */
-#define XN_HO_FIRST_TX_MAX_SLOTS 64
-typedef struct {
-  bool in_use;
-  ue_id_t ue_id;
-  rb_id_t rb_id;
-} xn_ho_first_tx_slot_t;
-
-static xn_ho_first_tx_slot_t xn_ho_first_tx_slots[XN_HO_FIRST_TX_MAX_SLOTS];
-static pthread_mutex_t xn_ho_first_tx_lock = PTHREAD_MUTEX_INITIALIZER;
-static int xn_ho_first_tx_pending;
-
-static void xn_ho_pdcp_arm_first_tx(ue_id_t ue_id, rb_id_t rb_id)
-{
-  pthread_mutex_lock(&xn_ho_first_tx_lock);
-  int free_slot = -1;
-  for (int i = 0; i < XN_HO_FIRST_TX_MAX_SLOTS; i++) {
-    if (xn_ho_first_tx_slots[i].in_use && xn_ho_first_tx_slots[i].ue_id == ue_id && xn_ho_first_tx_slots[i].rb_id == rb_id) {
-      pthread_mutex_unlock(&xn_ho_first_tx_lock);
-      return; /* already armed, waiting for its first PDU */
-    }
-    if (free_slot < 0 && !xn_ho_first_tx_slots[i].in_use)
-      free_slot = i;
-  }
-  if (free_slot >= 0) {
-    xn_ho_first_tx_slots[free_slot] = (xn_ho_first_tx_slot_t){.in_use = true, .ue_id = ue_id, .rb_id = rb_id};
-    xn_ho_first_tx_pending++;
-  }
-  pthread_mutex_unlock(&xn_ho_first_tx_lock);
-}
-
-static void xn_ho_pdcp_capture_first_tx(ue_id_t ue_id, rb_id_t rb_id, uint32_t sn)
-{
-  if (xn_ho_first_tx_pending == 0)
-    return;
-  bool armed = false;
-  pthread_mutex_lock(&xn_ho_first_tx_lock);
-  for (int i = 0; i < XN_HO_FIRST_TX_MAX_SLOTS; i++) {
-    xn_ho_first_tx_slot_t *s = &xn_ho_first_tx_slots[i];
-    if (s->in_use && s->ue_id == ue_id && s->rb_id == rb_id) {
-      s->in_use = false;
-      xn_ho_first_tx_pending--;
-      armed = true;
-      break;
-    }
-  }
-  pthread_mutex_unlock(&xn_ho_first_tx_lock);
-  if (!armed)
-    return;
-
-  xn_ho_cuup_first_tx_record_t rec = {.rrc_ue_id = (uint32_t) ue_id, .drb_id = (int) rb_id, .sn = sn};
-  xn_ho_ts_mark(&rec.first_tx);
-  xn_ho_latency_append_cuup_first_tx(&rec);
 }
 
 void nr_pdcp_add_drb(int is_gnb,
@@ -1128,8 +1131,6 @@ bool nr_pdcp_data_req_drb(protocol_ctxt_t *ctxt_pP,
   deliver_pdu deliver_pdu_cb = rb->deliver_pdu;
 
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
-
-  xn_ho_pdcp_capture_first_tx(ue_id, rb_id, (uint32_t) count_used);
 
   deliver_pdu_cb(NULL, ue_id, rb_id, pdu_buf, pdu_size, count_used);
 
