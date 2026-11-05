@@ -66,8 +66,9 @@ def to_int(row, key, default=0):
 
 
 def sn_to_count(sn, ref_count, sn_bits=18):
-    """The source CSV logs the bare PDCP SN, the CU-UP CSV the full COUNT: lift sn to the COUNT nearest ref_count.
-    shortcut: assumes 18-bit DL SN; log the full COUNT in rrc_gNB_XNAP.c to drop this."""
+    """Lift sn to the COUNT nearest ref_count. Older source CSVs logged the bare PDCP SN, newer ones the full
+    COUNT (rrc_gNB_XNAP.c); a COUNT maps to itself, so both work.
+    shortcut: assumes 18-bit DL SN for old CSVs; drop once only full-COUNT CSVs remain."""
     mod = 1 << sn_bits
     d = (sn - ref_count) % mod
     return ref_count + (d - mod if d > mod // 2 else d)
@@ -76,6 +77,7 @@ def sn_to_count(sn, ref_count, sn_bits=18):
 assert sn_to_count(156368, 418501) == 418512  # TC2 run 1: boundary 11 above first forwarded COUNT
 assert sn_to_count(5, 262140) == 262149  # SN wrapped past the HFN boundary
 assert sn_to_count(262140, 262150) == 262140
+assert sn_to_count(418512, 418501) == 418512  # full COUNT from a newer source CSV
 
 
 def parse_drb_list_u32(s):

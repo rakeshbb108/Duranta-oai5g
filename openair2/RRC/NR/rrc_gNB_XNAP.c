@@ -595,7 +595,9 @@ int rrc_gNB_send_XNAP_SN_STATUS_TRANSFER(gNB_RRC_INST *rrc,
     if (UE->ho_context->source->lat_n_drb < MAX_DRBS_PER_UE) {
       int idx = UE->ho_context->source->lat_n_drb++;
       UE->ho_context->source->lat_drb_ids[idx] = drb_id;
-      UE->ho_context->source->lat_dl_count_sn[idx] = pdcp_status[i].dl_count.sn;
+      // full COUNT (TS 38.323): the target-side CU-UP CSV logs COUNT, not the bare SN
+      UE->ho_context->source->lat_dl_count_sn[idx] = (pdcp_status[i].dl_count.hfn << (sn_length_18 ? 18 : 12))
+                                                     | pdcp_status[i].dl_count.sn;
     }
   }
 
