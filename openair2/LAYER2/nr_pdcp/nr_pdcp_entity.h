@@ -46,13 +46,15 @@ typedef struct {
 /* Bounded backlog of plaintext DL SDUs (with their original COUNT) kept on gNB
  * DRB entities so they can be forwarded to the target, with SN preserved, on
  * Xn HO instead of being silently dropped when RLC's tx queue is torn down.
- * NULL for SRBs and UE-side entities. */
-#define NR_PDCP_SHADOW_RING_CAP_COUNT 2048
-#define NR_PDCP_SHADOW_RING_CAP_BYTES (4 * 1024 * 1024)
+ * NULL for SRBs and UE-side entities. TS 38.323 5.1.2 requires forwarding every
+ * unacknowledged SDU and only discardTimer (5.3) may drop one, so the ring is bounded
+ * only by the PDCP window (the per-entity cap_count, beyond it SNs alias at the target)
+ * and a memory guard; reaching either loses data and is logged as an error. */
+#define NR_PDCP_SHADOW_RING_CAP_BYTES (64 * 1024 * 1024)
 #define NR_PDCP_SHADOW_SDU_NO_QFI (-1)
-/* Xn HO target: held forwarded SDUs, a full source backlog (with SN) plus the fresh SDUs
- * (without SN) forwarded until the SN status is applied */
-#define NR_PDCP_FWD_HOLD_CAP_COUNT (4 * NR_PDCP_SHADOW_RING_CAP_COUNT)
+/* Xn HO target: held forwarded SDUs, a full source backlog (with SN, at most one 18-bit
+ * window) plus the fresh SDUs (without SN) forwarded until the SN status is applied */
+#define NR_PDCP_FWD_HOLD_CAP_COUNT (2 * (1 << 17))
 /* Xn HO guard timers (ms). A handover completes within TXnRELOCoverall, and the End Marker
  * follows the path switch within milliseconds.
  * Source: from the DL freeze, until the UPF End Marker; then forwarding is ended anyway.
@@ -99,11 +101,12 @@ typedef struct nr_pdcp_shadow_ring_s {
   nr_pdcp_shadow_sdu_t *tail; /* newest */
   int count;
   int byte_count;
+  int cap_count;
   uint32_t dropped_oldest;
   uint32_t dropped_expired;
 } nr_pdcp_shadow_ring_t;
 
-nr_pdcp_shadow_ring_t *nr_pdcp_shadow_ring_new(void);
+nr_pdcp_shadow_ring_t *nr_pdcp_shadow_ring_new(int cap_count);
 void nr_pdcp_shadow_ring_push(nr_pdcp_shadow_ring_t *ring, const char *buffer, int size, uint32_t count, int qfi, uint64_t now);
 /* evicts the entry with this exact COUNT, if present */
 void nr_pdcp_shadow_ring_ack(nr_pdcp_shadow_ring_t *ring, uint32_t count);

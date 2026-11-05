@@ -27,9 +27,11 @@ int nr_max_pdcp_pdu_size(sdu_size_t sdu_size)
   return (sdu_size + LONG_PDCP_HEADER_SIZE + PDCP_INTEGRITY_SIZE);
 }
 
-nr_pdcp_shadow_ring_t *nr_pdcp_shadow_ring_new(void)
+nr_pdcp_shadow_ring_t *nr_pdcp_shadow_ring_new(int cap_count)
 {
-  return calloc_or_fail(1, sizeof(nr_pdcp_shadow_ring_t));
+  nr_pdcp_shadow_ring_t *ring = calloc_or_fail(1, sizeof(nr_pdcp_shadow_ring_t));
+  ring->cap_count = cap_count;
+  return ring;
 }
 
 static void shadow_ring_pop_head(nr_pdcp_shadow_ring_t *ring)
@@ -62,7 +64,7 @@ void nr_pdcp_shadow_ring_push(nr_pdcp_shadow_ring_t *ring, const char *buffer, i
   ring->byte_count += size;
 
   while (ring->head != NULL
-         && (ring->count > NR_PDCP_SHADOW_RING_CAP_COUNT || ring->byte_count > NR_PDCP_SHADOW_RING_CAP_BYTES)) {
+         && (ring->count > ring->cap_count || ring->byte_count > NR_PDCP_SHADOW_RING_CAP_BYTES)) {
     shadow_ring_pop_head(ring);
     ring->dropped_oldest++;
   }
@@ -123,8 +125,8 @@ void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id,
     return;
   nr_pdcp_shadow_ring_t *ring = entity->shadow_ring;
   if (ring->dropped_oldest > 0)
-    LOG_W(PDCP,
-          "UE %lx DRB %d: %u unacknowledged SDUs evicted (backlog cap) before forwarding\n",
+    LOG_E(PDCP,
+          "UE %lx DRB %d: %u unacknowledged SDUs evicted (PDCP window or memory bound) before forwarding, lost\n",
           ue_id,
           entity->rb_id,
           ring->dropped_oldest);
@@ -1102,7 +1104,7 @@ nr_pdcp_entity_t *new_nr_pdcp_entity(
    * creates DRB entities as NR_PDCP_DRB_AM; when the entity type is derived
    * from the actual RLC mode, RLC-UM DRBs will be correctly excluded here. */
   if (is_gnb && type == NR_PDCP_DRB_AM)
-    ret->shadow_ring = nr_pdcp_shadow_ring_new();
+    ret->shadow_ring = nr_pdcp_shadow_ring_new(ret->window_size);
 
   nr_pdcp_entity_set_security(ret, security_parameters);
 

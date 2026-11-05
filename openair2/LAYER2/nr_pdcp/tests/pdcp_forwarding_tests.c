@@ -130,6 +130,18 @@ static void test_ack_unknown_count(void)
   e->delete_entity(e);
 }
 
+/* source: the backlog is bounded by the PDCP window only (a full 12-bit window of 2048 SDUs
+ * is kept); one more SDU evicts the oldest, which is counted as lost */
+static void test_source_ring_window_bound(void)
+{
+  nr_pdcp_entity_t *e = new_drb(12);
+  for (int i = 0; i <= e->window_size; i++)
+    send_sdu(e, (char)i);
+  CHECK(e->shadow_ring->count == e->window_size);
+  CHECK(e->shadow_ring->dropped_oldest == 1 && e->shadow_ring->head->count == 1);
+  e->delete_entity(e);
+}
+
 /* target: forwarded SDUs wait for the SN status, then keep their arrival order; an SDU
  * with SN gets the COUNT below the received DL COUNT with that SN (here across an HFN
  * boundary), an SDU without SN is numbered from the DL COUNT */
@@ -192,15 +204,15 @@ static void test_target_hold_full_backlog(void)
   nr_pdcp_entity_t *e = new_drb(18);
   e->fwd_hold = true;
   char c = 'z';
-  for (int sn = 0; sn < NR_PDCP_SHADOW_RING_CAP_COUNT; sn++)
+  for (int sn = 0; sn < e->window_size; sn++)
     nr_pdcp_entity_recv_forwarded_sdu(e, 1, &c, 1, sn);
   for (int i = 0; i < 4; i++)
     nr_pdcp_entity_recv_forwarded_sdu(e, 1, &c, 1, -1);
-  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 0, .sn = NR_PDCP_SHADOW_RING_CAP_COUNT}, 18);
+  e->set_pdcp_count_dl(e, (nr_pdcp_count_t){.hfn = 0, .sn = e->window_size}, 18);
   tx_n = 0;
   nr_pdcp_entity_release_forwarded(e, 1);
-  CHECK(tx_n == NR_PDCP_SHADOW_RING_CAP_COUNT + 4);
-  CHECK(e->tx_next == NR_PDCP_SHADOW_RING_CAP_COUNT + 4);
+  CHECK(tx_n == e->window_size + 4);
+  CHECK(e->tx_next == e->window_size + 4);
   e->delete_entity(e);
 }
 
@@ -376,6 +388,7 @@ int main(void)
   test_forward_unacked_in_order();
   test_forward_sn_wraps();
   test_ack_unknown_count();
+  test_source_ring_window_bound();
   test_target_hold_and_count();
   test_target_count_window();
   test_target_hold_full_backlog();
