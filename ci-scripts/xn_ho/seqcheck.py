@@ -58,6 +58,12 @@ def cmd_recv(a):
   max_seq = -1
   first_rx = None
   last_rx = None
+  # inter-arrival stalls longer than --stall-ms: the user-plane interruption estimate
+  stalls = []
+  max_gap_ns = 0
+  trace = open(a.trace, "w") if a.trace else None
+  if trace:
+    trace.write("seq,tx_ns,rx_ns\n")
   end = time.monotonic() + a.duration
   idle_end = None
   while time.monotonic() < end:
@@ -72,10 +78,17 @@ def cmd_recv(a):
     idle_end = None
     if len(data) < HDR.size:
       continue
-    seq, _ = HDR.unpack_from(data)
+    seq, tx_ns = HDR.unpack_from(data)
     now_ns = time.time_ns()
+    if trace:
+      trace.write(f"{seq},{tx_ns},{now_ns}\n")
     if first_rx is None:
       first_rx = now_ns
+    else:
+      gap = now_ns - last_rx
+      max_gap_ns = max(max_gap_ns, gap)
+      if gap >= a.stall_ms * 1e6:
+        stalls.append({"start_ns": last_rx, "end_ns": now_ns, "gap_ms": round(gap / 1e6, 3), "next_seq": seq})
     last_rx = now_ns
     if seq >= len(seen):
       seen.extend(b"\0" * (seq + 1 - len(seen) + 4096))
@@ -110,9 +123,13 @@ def cmd_recv(a):
     "duplicates": dup,
     "reordered": reordered,
     "gaps": gaps[:100],
+    "max_interarrival_ms": round(max_gap_ns / 1e6, 3),
+    "stalls": stalls[:100],
     "first_rx_ns": first_rx,
     "last_rx_ns": last_rx,
   }
+  if trace:
+    trace.close()
   out = json.dumps(res, indent=2)
   if a.json:
     with open(a.json, "w") as f:
@@ -138,6 +155,8 @@ def main():
   pr.add_argument("--idle", type=float, default=3.0, help="stop after this many idle seconds once traffic started (0: never)")
   pr.add_argument("--expect", type=int, default=0, help="number of datagrams sent (to detect trailing loss)")
   pr.add_argument("--json", help="write the summary here")
+  pr.add_argument("--stall-ms", type=float, default=20.0, help="report inter-arrival gaps at least this long")
+  pr.add_argument("--trace", help="write per-datagram seq,tx_ns,rx_ns CSV here")
   a = p.parse_args()
   return cmd_send(a) if a.cmd == "send" else cmd_recv(a)
 
