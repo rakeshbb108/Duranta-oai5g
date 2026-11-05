@@ -65,6 +65,19 @@ def to_int(row, key, default=0):
     return int(v) if v not in (None, "") else default
 
 
+def sn_to_count(sn, ref_count, sn_bits=18):
+    """The source CSV logs the bare PDCP SN, the CU-UP CSV the full COUNT: lift sn to the COUNT nearest ref_count.
+    shortcut: assumes 18-bit DL SN; log the full COUNT in rrc_gNB_XNAP.c to drop this."""
+    mod = 1 << sn_bits
+    d = (sn - ref_count) % mod
+    return ref_count + (d - mod if d > mod // 2 else d)
+
+
+assert sn_to_count(156368, 418501) == 418512  # TC2 run 1: boundary 11 above first forwarded COUNT
+assert sn_to_count(5, 262140) == 262149  # SN wrapped past the HFN boundary
+assert sn_to_count(262140, 262150) == 262140
+
+
 def parse_drb_list_u32(s):
     """Parse "id:value;id:value" into {id: value}."""
     out = {}
@@ -148,10 +161,10 @@ def merge_row(src, tgt, cuup_rows):
 
         total_lost = 0
         any_estimate = False
-        for drb_id, (first_sn, _) in first_tx_by_drb.items():
+        for drb_id, (first_count, _) in first_tx_by_drb.items():
             if drb_id in dl_count_sn:
                 any_estimate = True
-                total_lost += max(0, first_sn - dl_count_sn[drb_id])
+                total_lost += max(0, first_count - sn_to_count(dl_count_sn[drb_id], first_count))
         if any_estimate:
             out["est_lost_pdcp_pdus"] = total_lost
 
