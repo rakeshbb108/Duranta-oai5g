@@ -780,6 +780,7 @@ static void nr_rx_ra_sdu(gNB_MAC_INST *mac,
     if (!transition_ra_connected_nr_ue(mac, UE)) {
       LOG_E(NR_MAC, "cannot add UE %04x: list is full\n", UE->rnti);
       delete_nr_ue_data(UE, &mac->UE_info.uid_allocator);
+      return;
     } else {
       LOG_A(NR_MAC, "(rnti 0x%04x) CFRA procedure succeeded!\n", UE->rnti);
     }
@@ -894,8 +895,12 @@ static void nr_rx_ra_sdu(gNB_MAC_INST *mac,
     return;
   }
 
-  if (cfra)
-    return; // rest not relevant for CFRA
+  if (cfra) {
+    // CFRA: RA is complete at RAR (TS 38.321 5.1.4), so this PUSCH is not a Msg3 but the UE's first
+    // UL data, e.g. RRCReconfigurationComplete and BSR (TS 38.331 5.3.5.3): decode it, do not drop it
+    nr_process_mac_pdu(mac, cell, UE, frame, slot, sdu, sdu_len, harq_pid);
+    return;
+  }
 
   // UE Contention Resolution Identity
   // Store the first 48 bits belonging to the uplink CCCH SDU within Msg3 to fill in Msg4
