@@ -72,10 +72,10 @@ bool DURecvCb(protocol_ctxt_t *ctxt_pP,
 }
 
 /* RLC delivery confirmation of an F1-U DL SDU (RLC lock held) */
-static void du_dl_delivered(int ue_id, int rb_id, int sdu_id, int tx_space)
+static void du_dl_delivered(int ue_id, int rb_id, int sdu_id, int tx_space, int tx_occupancy)
 {
   if (sdu_id >= 0)
-    f1u_dl_delivery_delivered(ue_id, rb_id, sdu_id, tx_space > 0 ? tx_space : 0);
+    f1u_dl_delivery_delivered(ue_id, rb_id, sdu_id, f1u_dl_delivery_desired_buffer_size(tx_space, tx_occupancy));
 }
 
 /* DL DATA DELIVERY STATUS toward the CU-UP (TS 38.425) */

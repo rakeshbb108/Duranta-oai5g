@@ -88,6 +88,18 @@ static void test_sn_wrap_and_isolation(void)
   CHECK(n_reports == 1);
 }
 
+/* desired buffer size: free RLC space by default, else the target minus the RLC queue */
+static void test_desired_buffer_size(void)
+{
+  CHECK(f1u_dl_delivery_desired_buffer_size(5000, 100) == 5000);
+  CHECK(f1u_dl_delivery_desired_buffer_size(-1, 100) == 0);
+  f1u_dl_delivery_set_target_queue_bytes(1000);
+  CHECK(f1u_dl_delivery_desired_buffer_size(5000, 300) == 700);
+  CHECK(f1u_dl_delivery_desired_buffer_size(5000, 1000) == 0);
+  CHECK(f1u_dl_delivery_desired_buffer_size(5000, 4000) == 0);
+  f1u_dl_delivery_set_target_queue_bytes(0);
+}
+
 int main(void)
 {
   logInit();
@@ -95,6 +107,7 @@ int main(void)
   test_in_order();
   test_out_of_order();
   test_sn_wrap_and_isolation();
+  test_desired_buffer_size();
   printf("f1u_dl_delivery_test: OK\n");
   return 0;
 }

@@ -560,7 +560,7 @@ rb_found:
 
   /* DU (F1 split): DL delivery report toward the CU-UP; called with the RLC lock held */
   if (dl_delivered_cb)
-    dl_delivered_cb(ue->ue_id, rb_id, sdu_id, entity->available_tx_space(entity));
+    dl_delivered_cb(ue->ue_id, rb_id, sdu_id, entity->available_tx_space(entity), entity->tx_list_occupancy(entity));
 
   /* prune the PDCP shadow buffer used for Xn HO DL data forwarding; PDCP uses the
    * CU UE ID, as in deliver_sdu() */

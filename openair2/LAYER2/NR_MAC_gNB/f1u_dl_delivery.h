@@ -24,5 +24,10 @@ void f1u_dl_delivery_submitted(uint32_t ue_id, int drb_id, uint32_t sn);
 /* RLC confirmed the delivery of the PDU with this PDCP SN; may report */
 void f1u_dl_delivery_delivered(uint32_t ue_id, int drb_id, uint32_t sn, uint32_t desired_buffer_size);
 void f1u_dl_delivery_remove_ue(uint32_t ue_id);
+/* DL flow control (dl_flow_control.target_queue_bytes): the DRB's RLC DL queue the DU wants
+ * kept; 0 (default) reports the free RLC space as before */
+void f1u_dl_delivery_set_target_queue_bytes(uint32_t bytes);
+/* Desired buffer size of the DL DATA DELIVERY STATUS (TS 38.425), in octets */
+uint32_t f1u_dl_delivery_desired_buffer_size(int tx_space, int tx_occupancy);
 
 #endif /* F1U_DL_DELIVERY_H_ */
