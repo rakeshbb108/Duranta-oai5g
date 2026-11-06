@@ -567,6 +567,8 @@ rb_found:
   if (!du_exists_f1_ue_data(ue->ue_id))
     return;
   nr_pdcp_entity_ack_sdu(du_get_f1_ue_data(ue->ue_id).secondary_ue, rb_id, (uint32_t)sdu_id);
+  /* monolithic gNB: DL flow control credit from the local RLC queue (no-op elsewhere) */
+  nr_pdcp_dl_flow_ctrl_rlc_delivered(du_get_f1_ue_data(ue->ue_id).secondary_ue, rb_id, entity->tx_list_occupancy(entity));
 
 #if 0
   msg = itti_alloc_new_message(TASK_RLC_ENB, RLC_SDU_INDICATION);

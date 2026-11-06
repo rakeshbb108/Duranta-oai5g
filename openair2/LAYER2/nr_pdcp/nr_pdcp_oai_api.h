@@ -129,6 +129,7 @@ void nr_pdcp_forwarding_end_received(ue_id_t ue_id, rb_id_t rb_id);
 void nr_pdcp_delivered_up_to_sn(ue_id_t ue_id, rb_id_t rb_id, uint32_t sn);
 void nr_pdcp_dl_flow_ctrl_credit(ue_id_t ue_id, rb_id_t rb_id, uint32_t desired_buffer_size);
 void nr_pdcp_dl_flow_ctrl_tick(ue_id_t ue_id, nr_pdcp_entity_t *rb);
+void nr_pdcp_dl_flow_ctrl_rlc_delivered(ue_id_t ue_id, rb_id_t rb_id, int tx_occupancy);
 bool nr_pdcp_ue_forwarding(ue_id_t ue_id);
 int nr_pdcp_end_dl_forwarding_after_grace(ue_id_t ue_id, int pdusession_id);
 

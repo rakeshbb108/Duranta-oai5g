@@ -558,12 +558,24 @@ void nr_pdcp_dl_flow_ctrl_credit(ue_id_t ue_id, rb_id_t rb_id, uint32_t desired_
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
 }
 
+/** @brief Monolithic gNB, RLC lock held (as nr_pdcp_entity_ack_sdu()): a DL SDU of a DRB was
+ *  delivered and the RLC DL queue now holds tx_occupancy octets; the room up to
+ *  target_queue_bytes is the credit, as the desired buffer size of a DU on F1-U */
+void nr_pdcp_dl_flow_ctrl_rlc_delivered(ue_id_t ue_id, rb_id_t rb_id, int tx_occupancy)
+{
+  const nr_dl_flow_ctrl_config_t *c = nr_pdcp_dl_flow_ctrl_config();
+  if (!c->enable || c->target_queue_bytes == 0 || NODE_IS_DU(node_type))
+    return;
+  uint32_t credit = tx_occupancy < (int)c->target_queue_bytes ? c->target_queue_bytes - tx_occupancy : 0;
+  nr_pdcp_dl_flow_ctrl_credit(ue_id, rb_id, credit);
+}
+
 /** @brief PDCP timer thread, manager lock held: 1 ms tick of a DRB's DL flow control */
 void nr_pdcp_dl_flow_ctrl_tick(ue_id_t ue_id, nr_pdcp_entity_t *rb)
 {
   if (rb->dl_fc == NULL)
     return;
-  int stall_timeout_ms = NODE_IS_CU(node_type) ? nr_pdcp_dl_flow_ctrl_config()->stall_timeout_ms : 0;
+  int stall_timeout_ms = nr_pdcp_dl_flow_ctrl_config()->stall_timeout_ms;
   nr_pdcp_dl_fc_tick(rb->dl_fc, nr_pdcp_current_time(), rb->discard_timer, stall_timeout_ms, ue_id, rb->rb_id, send_dl_pdu_drb_gnb);
 }
 
