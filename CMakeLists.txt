@@ -1080,6 +1080,7 @@ set(NR_PDCP_SRC
   ${OPENAIR2_DIR}/LAYER2/nr_pdcp/nr_pdcp_oai_api.c
   ${OPENAIR2_DIR}/LAYER2/nr_pdcp/nr_pdcp_ue_manager.c
   ${OPENAIR2_DIR}/LAYER2/nr_pdcp/nr_pdcp_entity.c
+  ${OPENAIR2_DIR}/LAYER2/nr_pdcp/nr_pdcp_dl_flow_ctrl.c
   ${OPENAIR2_DIR}/LAYER2/nr_pdcp/nr_pdcp_sdu.c
   ${OPENAIR2_DIR}/LAYER2/nr_pdcp/nr_pdcp_timer_thread.c
   ${OPENAIR2_DIR}/LAYER2/nr_pdcp/nr_pdcp_security_nea2.c

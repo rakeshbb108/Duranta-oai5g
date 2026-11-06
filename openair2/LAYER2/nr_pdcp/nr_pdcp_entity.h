@@ -253,6 +253,8 @@ typedef struct nr_pdcp_entity_s {
   /* Xn HO DL data forwarding: backlog of not-yet-confirmed-delivered plaintext
    * SDUs with their original COUNT. NULL except for gNB DRB entities. */
   nr_pdcp_shadow_ring_t *shadow_ring;
+  /* gNB DL flow control (nr_pdcp_dl_flow_ctrl.h); NULL if disabled or not an RLC AM DRB */
+  struct nr_pdcp_dl_fc_s *dl_fc;
 
   /* Xn HO source: non-NULL once DL forwarding started. The entity is frozen: no
    * new DL SN is assigned and every DL SDU goes to the target through this. */

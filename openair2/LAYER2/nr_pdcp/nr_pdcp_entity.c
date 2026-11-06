@@ -13,6 +13,7 @@
 #include "nr_pdcp_integrity_nia2.h"
 #include "nr_pdcp_integrity_nia1.h"
 #include "nr_pdcp_sdu.h"
+#include "nr_pdcp_dl_flow_ctrl.h"
 
 #include "LOG/log.h"
 #include "utils.h"
@@ -961,6 +962,7 @@ static void nr_pdcp_entity_delete(nr_pdcp_entity_t *entity)
     entity->free_integrity(entity->integrity_context);
   if (entity->shadow_ring != NULL)
     nr_pdcp_shadow_ring_free(entity->shadow_ring);
+  nr_pdcp_dl_fc_free(entity->dl_fc);
   fwd_queue_free(&entity->fwd_held);
   fwd_queue_free(&entity->ngu_held);
   free(entity);
@@ -1105,6 +1107,8 @@ nr_pdcp_entity_t *new_nr_pdcp_entity(
    * from the actual RLC mode, RLC-UM DRBs will be correctly excluded here. */
   if (is_gnb && type == NR_PDCP_DRB_AM)
     ret->shadow_ring = nr_pdcp_shadow_ring_new(ret->window_size);
+  if (is_gnb && type == NR_PDCP_DRB_AM && nr_pdcp_dl_flow_ctrl_config()->enable)
+    ret->dl_fc = nr_pdcp_dl_fc_new(ret->t_current);
 
   nr_pdcp_entity_set_security(ret, security_parameters);
 

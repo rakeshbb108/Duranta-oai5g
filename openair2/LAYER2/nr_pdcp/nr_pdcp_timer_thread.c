@@ -11,6 +11,7 @@
 
 #include "LOG/log.h"
 #include "common/utils/utils.h"
+#include "nr_pdcp_oai_api.h"
 
 static pthread_mutex_t   timer_thread_mutex   = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t    timer_thread_cond    = PTHREAD_COND_INITIALIZER;
@@ -56,6 +57,7 @@ static void *nr_pdcp_timer_thread(void *_nr_pdcp_ue_manager)
         if (drb == NULL)
           continue;
         drb->set_time(drb, curtime);
+        nr_pdcp_dl_flow_ctrl_tick(ue_list[i]->ue_id, drb);
         /* report once; the rest go at the next tick */
         if (drb->forward_timed_out && drb->forward_timeout && n_timeouts < (int)sizeofArray(timeouts)) {
           timeouts[n_timeouts].cb = drb->forward_timeout;

@@ -122,9 +122,9 @@ static void n3_error_indication(const gtpv1u_error_indication_ind_t *ind)
 /* F1-U DL DATA DELIVERY STATUS from the DU (TS 38.425) */
 static void f1u_dl_delivery_status(ue_id_t ue_id, int drb_id, int highest_delivered_sn, uint32_t desired_buffer_size)
 {
-  UNUSED(desired_buffer_size);
   if (highest_delivered_sn >= 0)
     nr_pdcp_delivered_up_to_sn(ue_id, drb_id, highest_delivered_sn);
+  nr_pdcp_dl_flow_ctrl_credit(ue_id, drb_id, desired_buffer_size);
 }
 
 /** @brief Fill and send request to create GTP-U tunnel (F1-U). For an RLC AM DRB, DL USER DATA

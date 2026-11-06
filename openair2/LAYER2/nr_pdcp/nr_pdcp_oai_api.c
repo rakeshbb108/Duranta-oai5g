@@ -38,6 +38,7 @@
 #include "common/utils/LOG/log.h"
 #include "nfapi/oai_integration/vendor_ext.h"
 #include "nr_pdcp_asn1_utils.h"
+#include "nr_pdcp_dl_flow_ctrl.h"
 #include "nr_pdcp_timer_thread.h"
 #include "nr_pdcp_ue_manager.h"
 #include "openair2/F1AP/f1ap_common.h"
@@ -509,10 +510,9 @@ static void deliver_pdu_drb_ue(void *deliver_pdu_data, ue_id_t ue_id, int rb_id,
   enqueue_rlc_data_req(&ctxt, 0, rb_id, sdu_id, 0, size, memblock);
 }
 
-static void deliver_pdu_drb_gnb(void *deliver_pdu_data, ue_id_t ue_id, int rb_id,
-                                char *buf, int size, int sdu_id)
+/* gNB: hand a DL PDCP Data PDU of a DRB to the lower layer, F1-U at the CU, RLC otherwise */
+static void send_dl_pdu_drb_gnb(ue_id_t ue_id, int rb_id, char *buf, int size, int sdu_id)
 {
-  DevAssert(deliver_pdu_data == NULL);
   /* sdu_id is the PDU's PDCP COUNT */
   xn_ho_pdcp_capture_first_tx(ue_id, rb_id, (uint32_t)sdu_id);
   f1_ue_data_t ue_data = cu_get_f1_ue_data(ue_id);
@@ -530,6 +530,41 @@ static void deliver_pdu_drb_gnb(void *deliver_pdu_data, ue_id_t ue_id, int rb_id
     LOG_D(PDCP, "%s(): (drb %d) calling rlc_data_req size %d\n", __func__, rb_id, size);
     enqueue_rlc_data_req(&ctxt, 0, rb_id, sdu_id, 0, size, memblock);
   }
+}
+
+static nr_pdcp_ue_t *find_ue(ue_id_t ue_id);
+
+/* called with the PDCP manager lock held, like every entity callback */
+static void deliver_pdu_drb_gnb(void *deliver_pdu_data, ue_id_t ue_id, int rb_id,
+                                char *buf, int size, int sdu_id)
+{
+  DevAssert(deliver_pdu_data == NULL);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
+  if (rb != NULL && rb->dl_fc != NULL)
+    nr_pdcp_dl_fc_submit(rb->dl_fc, nr_pdcp_current_time(), ue_id, rb_id, buf, size, sdu_id, send_dl_pdu_drb_gnb);
+  else
+    send_dl_pdu_drb_gnb(ue_id, rb_id, buf, size, sdu_id);
+}
+
+/** @brief F1-U at the PDCP host: DDDS desired buffer size of a DRB (TS 38.425) */
+void nr_pdcp_dl_flow_ctrl_credit(ue_id_t ue_id, rb_id_t rb_id, uint32_t desired_buffer_size)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
+  if (rb != NULL && rb->dl_fc != NULL)
+    nr_pdcp_dl_fc_set_credit(rb->dl_fc, nr_pdcp_current_time(), desired_buffer_size, ue_id, rb_id, send_dl_pdu_drb_gnb);
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+}
+
+/** @brief PDCP timer thread, manager lock held: 1 ms tick of a DRB's DL flow control */
+void nr_pdcp_dl_flow_ctrl_tick(ue_id_t ue_id, nr_pdcp_entity_t *rb)
+{
+  if (rb->dl_fc == NULL)
+    return;
+  int stall_timeout_ms = NODE_IS_CU(node_type) ? nr_pdcp_dl_flow_ctrl_config()->stall_timeout_ms : 0;
+  nr_pdcp_dl_fc_tick(rb->dl_fc, nr_pdcp_current_time(), rb->discard_timer, stall_timeout_ms, ue_id, rb->rb_id, send_dl_pdu_drb_gnb);
 }
 
 static void deliver_sdu_srb(void *_ue, nr_pdcp_entity_t *entity,
@@ -1263,6 +1298,12 @@ bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id,
   nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
   bool ok = rb != NULL && rb->forward_sdu == NULL;
   if (ok) {
+    /* held PDUs are in the shadow ring, which forwards them with their SN */
+    if (rb->dl_fc != NULL) {
+      int n = nr_pdcp_dl_fc_clear(rb->dl_fc);
+      if (n > 0)
+        LOG_I(PDCP, "UE %lx DRB %ld: %d DL PDUs held by flow control left to Xn HO forwarding\n", ue_id, rb_id, n);
+    }
     nr_pdcp_entity_start_dl_forwarding(rb, ue_id, forward_sdu, data);
     rb->forward_start = nr_pdcp_current_time();
     rb->forward_timeout = forward_timeout;
