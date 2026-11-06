@@ -1091,6 +1091,24 @@ typedef enum {
 }
 
 /*----------------------------------------------------------------------*/
+/* DL flow control (openair2/LAYER2/nr_pdcp/nr_pdcp_dl_flow_ctrl.h)      */
+/* enable, stall_timeout_ms: node hosting PDCP (CU-UP, CU, monolithic)   */
+/* target_queue_bytes: node hosting RLC (DU, monolithic)                 */
+/*----------------------------------------------------------------------*/
+
+#define CONFIG_STRING_DL_FLOW_CONTROL "dl_flow_control"
+
+#define CONFIG_DL_FLOW_CONTROL_ENABLE_IDX 0
+#define CONFIG_DL_FLOW_CONTROL_TARGET_QUEUE_BYTES_IDX 1
+#define CONFIG_DL_FLOW_CONTROL_STALL_TIMEOUT_MS_IDX 2
+
+#define DL_FLOW_CONTROL_PARAMS_DESC { \
+    {"enable", "hold DL PDCP PDUs while the lower layer has no room", 0, .iptr = NULL, .defintval = 0, TYPE_INT, 0}, \
+    {"target_queue_bytes", "DL RLC queue to keep per DRB, reported as the DDDS desired buffer size", 0, .uptr = NULL, .defuintval = 0, TYPE_UINT, 0}, \
+    {"stall_timeout_ms", "release one held PDU if no delivery report for this long", 0, .iptr = NULL, .defintval = 20, TYPE_INT, 0}, \
+}
+
+/*----------------------------------------------------------------------*/
 
 #define CONFIG_STRING_NRDC "nrdc"
 

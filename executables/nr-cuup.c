@@ -14,6 +14,7 @@
 #include "openair2/F1AP/f1ap_ids.h"
 #include "openair2/GNB_APP/gnb_config.h"
 #include "nr_pdcp/nr_pdcp_oai_api.h"
+#include "nr_pdcp/nr_pdcp_dl_flow_ctrl.h"
 #include "common/utils/time_manager/time_manager.h"
 
 RAN_CONTEXT_t RC;
@@ -144,6 +145,7 @@ int main(int argc, char **argv)
   AssertFatal(rc >= 0, "Create task for GTPV1U failed\n");
   rc = itti_create_task(TASK_CUUP_E1, E1AP_CUUP_task, NULL);
   AssertFatal(rc >= 0, "Create task for CUUP E1 failed\n");
+  nr_pdcp_dl_flow_ctrl_read_config(get_node_type());
   nr_pdcp_layer_init();
   cu_init_f1_ue_data(); // for CU-UP/CP mapping: we use the same
   E1_t e1type = UPtype;

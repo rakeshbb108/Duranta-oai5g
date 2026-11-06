@@ -1094,6 +1094,7 @@ set(NR_PDCP_SRC
 set(NR_PDCP_SRC_GNB
   ${NR_PDCP_SRC}
   openair2/LAYER2/nr_pdcp/cucp_cuup_handler.c
+  openair2/LAYER2/nr_pdcp/nr_pdcp_dl_flow_ctrl_config.c
   openair2/LAYER2/nr_pdcp/cuup_cucp_if.c
   openair2/LAYER2/nr_pdcp/cuup_cucp_direct.c
   openair2/LAYER2/nr_pdcp/cuup_cucp_e1ap.c

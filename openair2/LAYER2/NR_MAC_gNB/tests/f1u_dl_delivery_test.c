@@ -9,6 +9,7 @@
 #include <stdlib.h>
 
 #include "openair2/LAYER2/NR_MAC_gNB/f1u_dl_delivery.h"
+#include "openair2/LAYER2/nr_pdcp/nr_pdcp_dl_flow_ctrl.h"
 #include "common/utils/LOG/log.h"
 
 #define CHECK(c)                                                             \
@@ -93,11 +94,11 @@ static void test_desired_buffer_size(void)
 {
   CHECK(f1u_dl_delivery_desired_buffer_size(5000, 100) == 5000);
   CHECK(f1u_dl_delivery_desired_buffer_size(-1, 100) == 0);
-  f1u_dl_delivery_set_target_queue_bytes(1000);
+  nr_pdcp_dl_flow_ctrl_configure(&(nr_dl_flow_ctrl_config_t){.target_queue_bytes = 1000});
   CHECK(f1u_dl_delivery_desired_buffer_size(5000, 300) == 700);
   CHECK(f1u_dl_delivery_desired_buffer_size(5000, 1000) == 0);
   CHECK(f1u_dl_delivery_desired_buffer_size(5000, 4000) == 0);
-  f1u_dl_delivery_set_target_queue_bytes(0);
+  nr_pdcp_dl_flow_ctrl_configure(&(nr_dl_flow_ctrl_config_t){0});
 }
 
 int main(void)

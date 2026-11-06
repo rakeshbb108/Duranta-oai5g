@@ -10,6 +10,7 @@
 
 #include "common/utils/LOG/log.h"
 #include "common/utils/assertions.h"
+#include "openair2/LAYER2/nr_pdcp/nr_pdcp_dl_flow_ctrl.h"
 
 #define MAX_TRACKERS 256
 /* PDUs tracked per DRB; when full, tracking restarts (nothing is reported for the lost ones) */
@@ -28,15 +29,10 @@ typedef struct {
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static tracker_t *trackers[MAX_TRACKERS];
 static f1u_dl_delivery_report_t report_cb;
-static uint32_t target_queue_bytes;
-
-void f1u_dl_delivery_set_target_queue_bytes(uint32_t bytes)
-{
-  target_queue_bytes = bytes;
-}
 
 uint32_t f1u_dl_delivery_desired_buffer_size(int tx_space, int tx_occupancy)
 {
+  const uint32_t target_queue_bytes = nr_pdcp_dl_flow_ctrl_config()->target_queue_bytes;
   if (target_queue_bytes == 0)
     return tx_space > 0 ? tx_space : 0;
   return tx_occupancy < (int)target_queue_bytes ? target_queue_bytes - tx_occupancy : 0;

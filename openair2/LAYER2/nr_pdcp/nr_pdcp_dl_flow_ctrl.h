@@ -15,16 +15,20 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "common/platform_types.h"
+#include "common/ngran_types.h"
 
 /* config section dl_flow_control */
 typedef struct {
   bool enable;                 /* PDCP host: hold DL PDCP PDUs while the lower layer has no room */
   uint32_t target_queue_bytes; /* RLC host: DL RLC queue to keep (DU, monolithic) */
-  int stall_timeout_ms;        /* PDCP host on F1-U: release one held PDU if no DDDS for this long */
+  int stall_timeout_ms;        /* PDCP host: release one held PDU if no delivery report for this long */
 } nr_dl_flow_ctrl_config_t;
 
 void nr_pdcp_dl_flow_ctrl_configure(const nr_dl_flow_ctrl_config_t *config);
 const nr_dl_flow_ctrl_config_t *nr_pdcp_dl_flow_ctrl_config(void);
+/* read the dl_flow_control section; a parameter in a process that does not host its
+ * layer (PDCP for enable/stall_timeout_ms, RLC for target_queue_bytes) is fatal */
+void nr_pdcp_dl_flow_ctrl_read_config(ngran_node_t node_type);
 
 typedef struct nr_pdcp_fc_pdu_s {
   struct nr_pdcp_fc_pdu_s *next;

@@ -36,6 +36,7 @@ unsigned short config_frames[4] = {2,9,11,13};
 #include <string.h>
 #include <unistd.h>
 #include "LAYER2/nr_pdcp/nr_pdcp_oai_api.h"
+#include "LAYER2/nr_pdcp/nr_pdcp_dl_flow_ctrl.h"
 #include "NR_PHY_INTERFACE/NR_IF_Module.h"
 #include "LAYER2/NR_MAC_gNB/nr_mac_gNB.h"
 #include "PHY/INIT/nr_phy_init.h"
@@ -169,6 +170,7 @@ static int create_gNB_tasks(ngran_node_t node_type, configmodule_interface_t *cf
 #endif
 
   RCconfig_verify(cfg, node_type);
+  nr_pdcp_dl_flow_ctrl_read_config(node_type);
 
   nr_cell_sched_t *cell = NULL; // This is still assuming RC.nb_nr_macrlc_inst is always 1, need to find a better way when RC.nb_nr_macrlc_inst is > 1
   if (RC.nb_nr_macrlc_inst > 0)
