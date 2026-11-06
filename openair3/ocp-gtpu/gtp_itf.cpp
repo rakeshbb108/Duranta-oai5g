@@ -1581,8 +1581,11 @@ static int Gtpv1uHandleGpdu(int h, uint8_t *msgBuf, uint32_t msgBufLen, const st
               LOG_W(GTPU, "DL DATA DELIVERY STATUS: malformed NR-RAN container\n");
               break;
             }
-            if (uedata.ddsCallBack && ddds.highest_delivered_nr_pdcp_sn_present)
-              uedata.ddsCallBack(uedata.ue_id, uedata.incoming_rb_id, ddds.highest_delivered_nr_pdcp_sn);
+            if (uedata.ddsCallBack)
+              uedata.ddsCallBack(uedata.ue_id,
+                                 uedata.incoming_rb_id,
+                                 ddds.highest_delivered_nr_pdcp_sn_present ? (int)ddds.highest_delivered_nr_pdcp_sn : -1,
+                                 ddds.desired_buffer_size);
             LOG_D(GTPU,
                   "DL DATA DELIVERY STATUS RX: ue %lx drb %u desired_buffer_size %u highest_tx_sn %u\n",
                   uedata.ue_id,

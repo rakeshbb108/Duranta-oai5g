@@ -72,8 +72,9 @@ typedef struct gtpv1u_gnb_delete_tunnel_req_s gtpv1u_gnb_delete_tunnel_req_t;
   /** @brief End Marker received on a tunnel; rb_id is the tunnel's incoming bearer ID */
   typedef void (*gtpCallbackEndMarker)(ue_id_t ue_id, int rb_id);
 
-  /** @brief F1-U at the CU: DL DATA DELIVERY STATUS with Highest Delivered NR PDCP SN received */
-  typedef void (*gtpCallbackDlDeliveryStatus)(ue_id_t ue_id, int rb_id, uint32_t highest_delivered_sn);
+  /** @brief F1-U at the CU: DL DATA DELIVERY STATUS received (TS 38.425). highest_delivered_sn is -1
+   *  if the report does not carry it; desired_buffer_size (octets) is mandatory in every report */
+  typedef void (*gtpCallbackDlDeliveryStatus)(ue_id_t ue_id, int rb_id, int highest_delivered_sn, uint32_t desired_buffer_size);
 
   /** @brief GTP callback payload (TS 23.527 clause 5.3.3.1) */
   typedef struct gtpv1u_error_indication_ind_s {

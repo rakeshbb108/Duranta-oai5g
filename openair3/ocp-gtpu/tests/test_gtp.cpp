@@ -455,13 +455,15 @@ static bool nrup_recv_du(protocol_ctxt_t *ctxt,
   nrup_rx_count++;
   return true;
 }
-static uint32_t nrup_ddds_sn;
+static int nrup_ddds_sn;
+static uint32_t nrup_ddds_dbs;
 static int nrup_ddds_count;
-static void nrup_recv_ddds(ue_id_t ue_id, int rb_id, uint32_t highest_delivered_sn)
+static void nrup_recv_ddds(ue_id_t ue_id, int rb_id, int highest_delivered_sn, uint32_t desired_buffer_size)
 {
   UNUSED(ue_id);
   EXPECT_EQ(rb_id, 1);
   nrup_ddds_sn = highest_delivered_sn;
+  nrup_ddds_dbs = desired_buffer_size;
   nrup_ddds_count++;
 }
 
@@ -494,7 +496,8 @@ TEST(gtp, nrup_report_delivered_and_ddds)
   gtpv1uSendDlDeliveryStatus(du, ue_id, drb_id, 10000, 5);
   usleep(100 * 1000);
   EXPECT_EQ(nrup_ddds_count, 1);
-  EXPECT_EQ(nrup_ddds_sn, 5u);
+  EXPECT_EQ(nrup_ddds_sn, 5);
+  EXPECT_EQ(nrup_ddds_dbs, 10000u);
 
   EXPECT_EQ(newGtpuDeleteAllTunnels(du, ue_id), 0);
   EXPECT_EQ(newGtpuDeleteAllTunnels(cu, ue_id), 0);
