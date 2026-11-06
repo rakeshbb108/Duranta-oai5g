@@ -264,6 +264,28 @@ static void test_target_end_before_sn_status(void)
   e->delete_entity(e);
 }
 
+/* target: End Marker received, SN status never: at the guard the held forwarded SDUs
+ * are dropped and the NG-U SDUs go, once; DL is not blocked afterwards */
+static void test_target_guard_end_marker_no_sn_status(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  e->fwd_hold = e->ngu_hold = true;
+  e->hold_start = 5000;
+  char f = 'f', n = 'n';
+  tx_n = 0;
+  nr_pdcp_entity_recv_forwarded_sdu(e, 1, &f, 1, 7);
+  CHECK(nr_pdcp_entity_hold_ngu_sdu(e, 1, &n, 1));
+  nr_pdcp_entity_forwarding_end_received(e, 1);
+  CHECK(tx_n == 0 && e->ngu_hold);
+  e->set_time(e, 5000 + NR_PDCP_FWD_TARGET_GUARD_MS);
+  CHECK(!e->fwd_hold && !e->ngu_hold);
+  CHECK(tx_n == 1 && tx_payload[0] == 'n');
+  CHECK(!nr_pdcp_entity_hold_ngu_sdu(e, 1, &n, 1));
+  e->set_time(e, 5001 + NR_PDCP_FWD_TARGET_GUARD_MS);
+  CHECK(tx_n == 1);
+  e->delete_entity(e);
+}
+
 /* source: the forwarding guard expires only without End Marker */
 static void test_source_guard(void)
 {
@@ -443,6 +465,7 @@ int main(void)
   test_source_guard();
   test_target_guard_no_sn_status();
   test_target_guard_no_end_marker();
+  test_target_guard_end_marker_no_sn_status();
   test_delivered_up_to_sn();
   test_source_stop_forwarding();
   test_source_end_marker_grace();

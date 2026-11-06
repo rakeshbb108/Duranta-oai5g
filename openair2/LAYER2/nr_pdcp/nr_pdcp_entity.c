@@ -373,11 +373,14 @@ void nr_pdcp_entity_check_forwarding_guards(nr_pdcp_entity_t *entity, uint64_t n
     }
     if (entity->ngu_hold) {
       LOG_W(PDCP,
-            "UE %lx DRB %d: no forwarding End Marker %d ms after setup\n",
+            "UE %lx DRB %d: forwarding not ended %d ms after setup, releasing NG-U SDUs\n",
             entity->hold_ue_id,
             entity->rb_id,
             NR_PDCP_FWD_TARGET_GUARD_MS);
-      nr_pdcp_entity_forwarding_end_received(entity, entity->hold_ue_id);
+      /* the End Marker may have arrived already (fwd_end) while the SN status did not:
+       * release NG-U directly, nr_pdcp_entity_forwarding_end_received() would return early */
+      entity->fwd_end = true;
+      release_ngu(entity, entity->hold_ue_id);
     }
   }
 }
