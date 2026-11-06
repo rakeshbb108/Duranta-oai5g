@@ -473,14 +473,16 @@ static bool xnu_fwd_tunnel_rx(protocol_ctxt_t *ctxt_pP,
 }
 
 /** @brief Xn HO source: on the DRB Data Forwarding Information (target DL forwarding
- *  tunnel), create the outgoing Xn-U tunnel, freeze the DRB and forward its backlog.
- *  Must precede the PDCP SN status read of the same Bearer Context Modification. */
-static void e1_start_xnu_forwarding(uint32_t ue_id, int drb_id, const UP_TL_information_t *tnl)
+ *  tunnel), create the outgoing Xn-U tunnel and freeze the DRB. Must precede the PDCP SN
+ *  status read of the same Bearer Context Modification; the backlog is forwarded after
+ *  the response, see e1_bearer_context_modif().
+ *  @return true if forwarding started */
+static bool e1_start_xnu_forwarding(uint32_t ue_id, int drb_id, const UP_TL_information_t *tnl)
 {
   instance_t xnuinst = get_xnu_gtp_instance();
   if (xnuinst < 0) {
     LOG_E(E1AP, "UE %u DRB %d: DL forwarding requested but no Xn-U GTP-U instance\n", ue_id, drb_id);
-    return;
+    return false;
   }
   transport_layer_addr_t addr = {.length = 32};
   memcpy(addr.buffer, &tnl->tlAddress, sizeof(in_addr_t));
@@ -488,9 +490,10 @@ static void e1_start_xnu_forwarding(uint32_t ue_id, int drb_id, const UP_TL_info
   if (!nr_pdcp_start_dl_forwarding(ue_id, drb_id, xnu_forward_sdu, xnu_forward_timeout, NULL)) {
     LOG_E(E1AP, "UE %u DRB %d: cannot start DL forwarding\n", ue_id, drb_id);
     e1_remove_xnu_tunnel(ue_id, drb_id);
-    return;
+    return false;
   }
   LOG_I(E1AP, "UE %u DRB %d: DL forwarding to TEID 0x%x\n", ue_id, drb_id, tnl->teId);
+  return true;
 }
 
 /** @brief Release UP resources for one PDU session (N3, F1-U, SDAP) */
@@ -519,6 +522,9 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
                                       sizeof(*modif.pduSessionMod));
 
   instance_t f1inst = get_f1_gtp_instance();
+  /* Xn HO source: DRBs frozen by this request, whose backlog goes after the response */
+  int fwd_drbs[MAX_DRBS_PER_UE];
+  int n_fwd_drbs = 0;
 
   /* PDU Session Resource To Modify List (see 9.3.3.11 of TS 38.463) */
   for (int i = 0; i < req->numPDUSessionsMod; i++) {
@@ -624,8 +630,10 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
 
       // DRB Data Forwarding Information (Xn HO source): before the SN status, which then
       // reports the frozen DL COUNT
-      if (to_modif->dl_fwd_tnl)
-        e1_start_xnu_forwarding(req->gNB_cu_up_ue_id, to_modif->id, to_modif->dl_fwd_tnl);
+      if (to_modif->dl_fwd_tnl && e1_start_xnu_forwarding(req->gNB_cu_up_ue_id, to_modif->id, to_modif->dl_fwd_tnl)) {
+        DevAssert(n_fwd_drbs < MAX_DRBS_PER_UE);
+        fwd_drbs[n_fwd_drbs++] = to_modif->id;
+      }
 
       // PDCP Status Information requested
       if (to_modif->pdcp_sn_status_requested) {
@@ -692,6 +700,14 @@ void e1_bearer_context_modif(const e1ap_bearer_mod_req_t *req)
 
   get_e1_if()->bearer_modif_response(&modif);
   free_e1ap_context_mod_response(&modif);
+
+  /* Xn HO source: the response carries the PDCP SN status for the SN STATUS TRANSFER, which
+   * the source sends once DL is frozen, not after forwarding (TS 38.300 9.2.3.2.1 step 7,
+   * TS 38.463 9.3.1.58 PDCP SN Status Information). Forwarding a large backlog takes tens
+   * of ms; before the response it delayed the SN STATUS TRANSFER past the UE CONTEXT
+   * RELEASE from the target, and the target dropped the forwarded data. */
+  for (int i = 0; i < n_fwd_drbs; i++)
+    nr_pdcp_send_dl_forwarding_backlog(req->gNB_cu_up_ue_id, fwd_drbs[i]);
 }
 
 static void remove_ue_e1(const uint32_t ue_id)

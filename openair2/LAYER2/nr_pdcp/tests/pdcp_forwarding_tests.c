@@ -88,6 +88,8 @@ static void test_forward_unacked_in_order(void)
 
   fwd_n = 0;
   nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  CHECK(fwd_n == 0); /* the backlog goes after the SN status */
+  CHECK(nr_pdcp_entity_send_dl_forwarding_backlog(e, 1) == 3);
   CHECK(fwd_n == 3);
   CHECK(fwd_sn[0] == 0 && fwd_payload[0] == 0);
   CHECK(fwd_sn[1] == 2 && fwd_payload[1] == 2);
@@ -109,6 +111,7 @@ static void test_forward_sn_wraps(void)
     send_sdu(e, i);
   fwd_n = 0;
   nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  nr_pdcp_entity_send_dl_forwarding_backlog(e, 1);
   CHECK(fwd_n == 4);
   CHECK(fwd_sn[0] == 4094 && fwd_sn[1] == 4095 && fwd_sn[2] == 0 && fwd_sn[3] == 1);
   nr_pdcp_count_t dl = e->get_pdcp_count_dl(e);
@@ -362,6 +365,7 @@ static void test_source_stop_forwarding(void)
   /* a new handover can start */
   fwd_n = 0;
   nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  nr_pdcp_entity_send_dl_forwarding_backlog(e, 1);
   CHECK(fwd_n == 1 && fwd_sn[0] == 1);
   e->delete_entity(e);
 }
@@ -372,6 +376,7 @@ static void test_source_end_marker_grace(void)
 {
   nr_pdcp_entity_t *e = new_drb(18);
   nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  nr_pdcp_entity_send_dl_forwarding_backlog(e, 1);
   e->forward_start = 1000;
   e->forward_grace = true;
   e->forward_grace_start = 1500;
@@ -379,6 +384,47 @@ static void test_source_end_marker_grace(void)
   CHECK(!e->forward_timed_out && e->forward_sdu == forward_sdu);
   e->set_time(e, 1500 + NR_PDCP_FWD_END_MARKER_GRACE_MS);
   CHECK(e->forward_timed_out);
+  e->delete_entity(e);
+}
+
+/* source: the SN status is read at the freeze, before any forwarding (TS 38.300 9.2.3.2.1
+ * step 7); DL SDUs arriving before the backlog is sent queue behind it, and the End Marker
+ * grace cannot end forwarding while the backlog is pending */
+static void test_backlog_after_sn_status(void)
+{
+  nr_pdcp_entity_t *e = new_drb(18);
+  for (char i = 0; i < 3; i++)
+    send_sdu(e, i);
+  fwd_n = 0;
+  nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  CHECK(fwd_n == 0 && e->fwd_backlog_pending);
+  nr_pdcp_count_t dl = e->get_pdcp_count_dl(e);
+  CHECK(dl.hfn == 0 && dl.sn == 3);
+
+  char fresh = 'x';
+  CHECK(nr_pdcp_entity_queue_fwd_backlog_sdu(e, &fresh, 1));
+  e->forward_grace = true;
+  e->forward_grace_start = 100;
+  e->set_time(e, 100 + 10 * NR_PDCP_FWD_END_MARKER_GRACE_MS);
+  CHECK(!e->forward_timed_out);
+
+  CHECK(nr_pdcp_entity_send_dl_forwarding_backlog(e, 1) == 3);
+  CHECK(fwd_n == 4 && !e->fwd_backlog_pending && e->fwd_backlog == NULL);
+  CHECK(fwd_sn[0] == 0 && fwd_sn[1] == 1 && fwd_sn[2] == 2);
+  CHECK(fwd_sn[3] == -1 && fwd_payload[3] == 'x');
+  /* once sent, the caller forwards new SDUs itself */
+  CHECK(!nr_pdcp_entity_queue_fwd_backlog_sdu(e, &fresh, 1));
+  e->set_time(e, 101 + 10 * NR_PDCP_FWD_END_MARKER_GRACE_MS);
+  CHECK(e->forward_timed_out);
+  e->delete_entity(e);
+
+  /* handover cancelled with the backlog pending: it is dropped, DL resumes */
+  e = new_drb(18);
+  send_sdu(e, 0);
+  nr_pdcp_entity_start_dl_forwarding(e, 1, forward_sdu, NULL);
+  CHECK(nr_pdcp_entity_queue_fwd_backlog_sdu(e, &fresh, 1));
+  nr_pdcp_entity_stop_dl_forwarding(e);
+  CHECK(!e->fwd_backlog_pending && e->fwd_backlog == NULL);
   e->delete_entity(e);
 }
 
@@ -400,6 +446,7 @@ int main(void)
   test_delivered_up_to_sn();
   test_source_stop_forwarding();
   test_source_end_marker_grace();
+  test_backlog_after_sn_status();
   printf("pdcp_forwarding_tests: OK\n");
   return 0;
 }

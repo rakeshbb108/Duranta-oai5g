@@ -870,6 +870,9 @@ bool nr_pdcp_end_dl_forwarding_drb(ue_id_t ue_id, rb_id_t rb_id)
   nr_pdcp_ue_t *ue = find_ue(ue_id);
   nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
   if (rb && rb->forward_sdu && !rb->forward_ended) {
+    /* the End Marker follows all forwarded data: send the backlog first */
+    if (rb->fwd_backlog_pending)
+      nr_pdcp_entity_send_dl_forwarding_backlog(rb, ue_id);
     rb->forward_ended = true;
     ended = true;
   }
@@ -1148,12 +1151,12 @@ bool nr_pdcp_data_req_drb(protocol_ctxt_t *ctxt_pP,
   }
 
   if (rb->forward_sdu) {
-    /* Xn HO source, DL frozen: fresh SDU to the target without SN, sent under the
-     * lock so that it cannot overtake the backlog forwarded with SN */
-    if (!rb->forward_ended)
-      rb->forward_sdu(rb->forward_sdu_data, ue_id, rb_id, (char *)sdu_buffer, sdu_buffer_size, -1, rb->sn_size);
-    else
+    /* Xn HO source, DL frozen: fresh SDU to the target without SN, queued behind the
+     * backlog while it is not sent, else sent under the lock: it cannot overtake it */
+    if (rb->forward_ended)
       LOG_W(PDCP, "UE %lx DRB %ld: DL SDU after the End Marker was sent, dropped\n", ue_id, rb_id);
+    else if (!nr_pdcp_entity_queue_fwd_backlog_sdu(rb, (char *)sdu_buffer, sdu_buffer_size))
+      rb->forward_sdu(rb->forward_sdu_data, ue_id, rb_id, (char *)sdu_buffer, sdu_buffer_size, -1, rb->sn_size);
     nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
     return 1;
   }
@@ -1322,6 +1325,23 @@ bool nr_pdcp_start_dl_forwarding(ue_id_t ue_id,
   }
   nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
   return ok;
+}
+
+/** @brief Xn HO source: forward the backlog of a frozen DRB, once its SN status was reported
+ *  (TS 38.300 9.2.3.2.1: the SN STATUS TRANSFER does not wait for data forwarding)
+ *  @return number of SDUs forwarded with SN, -1 if the DRB has no backlog pending */
+int nr_pdcp_send_dl_forwarding_backlog(ue_id_t ue_id, rb_id_t rb_id)
+{
+  nr_pdcp_manager_lock(nr_pdcp_ue_manager);
+  nr_pdcp_ue_t *ue = find_ue(ue_id);
+  nr_pdcp_entity_t *rb = ue ? nr_pdcp_get_rb(ue, rb_id, false) : NULL;
+  int n = -1;
+  if (rb && rb->forward_sdu && rb->fwd_backlog_pending) {
+    n = nr_pdcp_entity_send_dl_forwarding_backlog(rb, ue_id);
+    LOG_I(PDCP, "UE %lx DRB %ld: forwarded %d unacknowledged SDUs\n", ue_id, rb_id, n);
+  }
+  nr_pdcp_manager_unlock(nr_pdcp_ue_manager);
+  return n;
 }
 
 /** @brief Xn HO source, handover cancelled: resume DL transmission of a frozen DRB

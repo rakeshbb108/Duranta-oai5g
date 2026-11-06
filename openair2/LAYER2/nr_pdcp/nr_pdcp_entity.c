@@ -122,34 +122,67 @@ void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id,
   DevAssert(entity->forward_sdu == NULL);
   entity->forward_sdu = forward_sdu;
   entity->forward_sdu_data = data;
-  if (entity->shadow_ring == NULL)
-    return;
-  nr_pdcp_shadow_ring_t *ring = entity->shadow_ring;
-  if (ring->dropped_oldest > 0)
-    LOG_E(PDCP,
-          "UE %lx DRB %d: %u unacknowledged SDUs evicted (PDCP window or memory bound) before forwarding, lost\n",
-          ue_id,
-          entity->rb_id,
-          ring->dropped_oldest);
+  entity->fwd_backlog_pending = true;
   int n = 0;
-  nr_pdcp_shadow_sdu_t *sdu = nr_pdcp_shadow_ring_drain(ring);
+  if (entity->shadow_ring != NULL) {
+    nr_pdcp_shadow_ring_t *ring = entity->shadow_ring;
+    if (ring->dropped_oldest > 0)
+      LOG_E(PDCP,
+            "UE %lx DRB %d: %u unacknowledged SDUs evicted (PDCP window or memory bound) before forwarding, lost\n",
+            ue_id,
+            entity->rb_id,
+            ring->dropped_oldest);
+    n = ring->count;
+    entity->fwd_backlog_tail = ring->tail;
+    entity->fwd_backlog = nr_pdcp_shadow_ring_drain(ring);
+  }
+  LOG_I(PDCP, "UE %lx DRB %d: DL frozen at TX_NEXT %u, %d unacknowledged SDUs to forward\n", ue_id, entity->rb_id, entity->tx_next, n);
+}
+
+bool nr_pdcp_entity_queue_fwd_backlog_sdu(nr_pdcp_entity_t *entity, const char *buf, int size)
+{
+  if (!entity->fwd_backlog_pending)
+    return false;
+  nr_pdcp_shadow_sdu_t *sdu = calloc_or_fail(1, sizeof(*sdu) + size);
+  sdu->no_sn = true;
+  sdu->size = size;
+  memcpy(sdu->data, buf, size);
+  if (entity->fwd_backlog_tail)
+    entity->fwd_backlog_tail->next = sdu;
+  else
+    entity->fwd_backlog = sdu;
+  entity->fwd_backlog_tail = sdu;
+  return true;
+}
+
+static void free_fwd_backlog(nr_pdcp_entity_t *entity)
+{
+  nr_pdcp_shadow_sdu_t *sdu = entity->fwd_backlog;
   while (sdu != NULL) {
     nr_pdcp_shadow_sdu_t *next = sdu->next;
-    forward_sdu(data, ue_id, entity->rb_id, sdu->data, sdu->size, sdu->count & entity->sn_max, entity->sn_size);
     free(sdu);
     sdu = next;
-    n++;
   }
-  LOG_I(PDCP,
-        "UE %lx DRB %d: DL frozen at TX_NEXT %u, forwarded %d unacknowledged SDUs\n",
-        ue_id,
-        entity->rb_id,
-        entity->tx_next,
-        n);
+  entity->fwd_backlog = entity->fwd_backlog_tail = NULL;
+  entity->fwd_backlog_pending = false;
+}
+
+int nr_pdcp_entity_send_dl_forwarding_backlog(nr_pdcp_entity_t *entity, ue_id_t ue_id)
+{
+  DevAssert(entity->forward_sdu);
+  int n = 0;
+  for (nr_pdcp_shadow_sdu_t *sdu = entity->fwd_backlog; sdu != NULL; sdu = sdu->next) {
+    int sn = sdu->no_sn ? -1 : (int)(sdu->count & entity->sn_max);
+    entity->forward_sdu(entity->forward_sdu_data, ue_id, entity->rb_id, sdu->data, sdu->size, sn, entity->sn_size);
+    n += !sdu->no_sn;
+  }
+  free_fwd_backlog(entity);
+  return n;
 }
 
 void nr_pdcp_entity_stop_dl_forwarding(nr_pdcp_entity_t *entity)
 {
+  free_fwd_backlog(entity);
   entity->forward_sdu = NULL;
   entity->forward_sdu_data = NULL;
   entity->forward_ended = false;
@@ -315,7 +348,7 @@ static bool elapsed(uint64_t now, uint64_t start, uint64_t ms)
 void nr_pdcp_entity_check_forwarding_guards(nr_pdcp_entity_t *entity, uint64_t now)
 {
   if (entity->forward_sdu && !entity->forward_ended && !entity->forward_timed_out && entity->forward_grace
-      && elapsed(now, entity->forward_grace_start, NR_PDCP_FWD_END_MARKER_GRACE_MS)) {
+      && !entity->fwd_backlog_pending && elapsed(now, entity->forward_grace_start, NR_PDCP_FWD_END_MARKER_GRACE_MS)) {
     LOG_D(PDCP, "DRB %d: End Marker grace over, ending forwarding\n", entity->rb_id);
     entity->forward_timed_out = true;
   }
@@ -965,6 +998,7 @@ static void nr_pdcp_entity_delete(nr_pdcp_entity_t *entity)
   nr_pdcp_dl_fc_free(entity->dl_fc);
   fwd_queue_free(&entity->fwd_held);
   fwd_queue_free(&entity->ngu_held);
+  free_fwd_backlog(entity);
   free(entity);
 }
 

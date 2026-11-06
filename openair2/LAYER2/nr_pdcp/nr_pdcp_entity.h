@@ -72,6 +72,7 @@ typedef struct nr_pdcp_shadow_sdu_s {
   int qfi; /* NR_PDCP_SHADOW_SDU_NO_QFI if absent */
   int size;
   uint64_t t_arrival; /* entity->t_current (ms) when captured, for discardTimer */
+  bool no_sn; /* Xn HO source backlog: DL SDU that arrived after the freeze, forwarded without SN */
   struct nr_pdcp_shadow_sdu_s *next;
   char data[]; /* plaintext SDU bytes */
 } nr_pdcp_shadow_sdu_t;
@@ -260,6 +261,11 @@ typedef struct nr_pdcp_entity_s {
    * new DL SN is assigned and every DL SDU goes to the target through this. */
   nr_pdcp_forward_sdu_t forward_sdu;
   void *forward_sdu_data;
+  /* Xn HO source: SDUs frozen at the DL freeze, then the DL SDUs arriving until they are
+   * forwarded, in order; fwd_backlog_pending from the freeze until they are sent */
+  nr_pdcp_shadow_sdu_t *fwd_backlog;
+  nr_pdcp_shadow_sdu_t *fwd_backlog_tail;
+  bool fwd_backlog_pending;
   /* Xn HO source: End Marker sent, nothing more is forwarded */
   bool forward_ended;
   /* Xn HO source: forwarding guard, started at the freeze; forward_timed_out is set when
@@ -286,10 +292,19 @@ typedef struct nr_pdcp_entity_s {
 
 } nr_pdcp_entity_t;
 
-/* Xn HO source: freeze DL and forward the backlog. Every SDU still in the shadow
- * ring is passed to forward_sdu with its PDCP SN, in ascending COUNT order; later
- * DL SDUs are to be passed to forward_sdu without SN by the caller of process_sdu. */
+/* Xn HO source: freeze DL (no new DL COUNT is assigned, TX_NEXT is the DL COUNT of the
+ * SN status) and keep every SDU still in the shadow ring as the backlog to forward. It is
+ * sent by nr_pdcp_entity_send_dl_forwarding_backlog() once the SN status was reported:
+ * the SN STATUS TRANSFER does not wait for the forwarding (TS 38.300 9.2.3.2.1 step 7). */
 void nr_pdcp_entity_start_dl_forwarding(nr_pdcp_entity_t *entity, ue_id_t ue_id, nr_pdcp_forward_sdu_t forward_sdu, void *data);
+/* Xn HO source: forward the backlog to forward_sdu in order, the frozen SDUs with their
+ * PDCP SN in ascending COUNT order, then those arrived since without SN; later DL SDUs
+ * are passed to forward_sdu without SN by the caller of process_sdu.
+ * Returns the number of SDUs forwarded with SN. */
+int nr_pdcp_entity_send_dl_forwarding_backlog(nr_pdcp_entity_t *entity, ue_id_t ue_id);
+/* Xn HO source: while the backlog is not sent, queue a DL SDU behind it (forwarded without
+ * SN), so that it cannot overtake the backlog; false if no backlog is pending */
+bool nr_pdcp_entity_queue_fwd_backlog_sdu(nr_pdcp_entity_t *entity, const char *buf, int size);
 /* Xn HO source, handover cancelled: DL is no longer frozen, SDUs go to the lower layers from
  * TX_NEXT on again. The SDUs already forwarded are not sent again. */
 void nr_pdcp_entity_stop_dl_forwarding(nr_pdcp_entity_t *entity);
