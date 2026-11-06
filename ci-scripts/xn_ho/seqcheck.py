@@ -16,6 +16,7 @@ duplicated or reordered.
 
 import argparse
 import json
+import signal
 import socket
 import struct
 import sys
@@ -48,6 +49,10 @@ def cmd_send(a):
   return 0
 
 
+def _stop(signum, frame):
+  raise KeyboardInterrupt
+
+
 def cmd_recv(a):
   s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
   s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 << 20)
@@ -66,41 +71,47 @@ def cmd_recv(a):
     trace.write("seq,tx_ns,rx_ns\n")
   end = time.monotonic() + a.duration
   idle_end = None
-  while time.monotonic() < end:
-    try:
-      data = s.recv(65535)
-    except socket.timeout:
-      if a.idle and first_rx is not None and idle_end is None:
-        idle_end = time.monotonic() + a.idle
-      if idle_end is not None and time.monotonic() >= idle_end:
-        break
-      continue
-    idle_end = None
-    if len(data) < HDR.size:
-      continue
-    seq, tx_ns = HDR.unpack_from(data)
-    now_ns = time.time_ns()
-    if trace:
-      trace.write(f"{seq},{tx_ns},{now_ns}\n")
-    if first_rx is None:
-      first_rx = now_ns
-    else:
-      gap = now_ns - last_rx
-      max_gap_ns = max(max_gap_ns, gap)
-      if gap >= a.stall_ms * 1e6:
-        stalls.append({"start_ns": last_rx, "end_ns": now_ns, "gap_ms": round(gap / 1e6, 3), "next_seq": seq})
-    last_rx = now_ns
-    if seq >= len(seen):
-      seen.extend(b"\0" * (seq + 1 - len(seen) + 4096))
-    if seen[seq]:
-      dup += 1
-      continue
-    seen[seq] = 1
-    received += 1
-    if seq < max_seq:
-      reordered += 1
-    else:
-      max_seq = seq
+  # stopping the receiver (Ctrl-C, kill, kill -INT) still writes the summary
+  signal.signal(signal.SIGTERM, _stop)
+  try:
+    while time.monotonic() < end:
+      try:
+        data = s.recv(65535)
+      except socket.timeout:
+        if a.idle and first_rx is not None and idle_end is None:
+          idle_end = time.monotonic() + a.idle
+        if idle_end is not None and time.monotonic() >= idle_end:
+          break
+        continue
+      idle_end = None
+      if len(data) < HDR.size:
+        continue
+      seq, tx_ns = HDR.unpack_from(data)
+      now_ns = time.time_ns()
+      if trace:
+        trace.write(f"{seq},{tx_ns},{now_ns}\n")
+      if first_rx is None:
+        first_rx = now_ns
+      else:
+        gap = now_ns - last_rx
+        max_gap_ns = max(max_gap_ns, gap)
+        if gap >= a.stall_ms * 1e6:
+          stalls.append({"start_ns": last_rx, "end_ns": now_ns, "gap_ms": round(gap / 1e6, 3), "next_seq": seq})
+      last_rx = now_ns
+      if seq >= len(seen):
+        seen.extend(b"\0" * (seq + 1 - len(seen) + 4096))
+      if seen[seq]:
+        dup += 1
+        continue
+      seen[seq] = 1
+      received += 1
+      if seq < max_seq:
+        reordered += 1
+      else:
+        max_seq = seq
+
+  except KeyboardInterrupt:
+    pass
 
   # loss gaps over [0, max_seq]; trailing loss is not detectable without --expect
   top = max(max_seq, a.expect - 1 if a.expect else -1)
