@@ -688,6 +688,17 @@ static int udpServerSocket(openAddr_s addr)
 
   int sendbuff = 1000 * 1000 * 10;
   AssertFatal(0 == setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sendbuff, sizeof(sendbuff)), "%s", strerror(errno));
+  // At an Xn HO the source forwards its whole unacknowledged DL backlog at once (several MB in
+  // a few ms); with the default receive buffer (net.core.rmem_max, often 208 KB) the kernel
+  // drops it before the GTP thread reads it, which breaks lossless forwarding (TS 38.300
+  // 9.2.3.2.2). SO_RCVBUFFORCE goes past rmem_max when running as root (CAP_NET_ADMIN).
+  int rcvbuf = 32 * 1024 * 1024;
+  if (setsockopt(sockfd, SOL_SOCKET, SO_RCVBUFFORCE, &rcvbuf, sizeof(rcvbuf)) != 0
+      && setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) != 0)
+    LOG_W(GTPU, "[%d] cannot set receive buffer size: %s\n", sockfd, strerror(errno));
+  socklen_t optlen = sizeof(rcvbuf);
+  getsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, &optlen);
+  LOG_I(GTPU, "[%d] %s:%s receive buffer %d bytes\n", sockfd, addr.originHost, addr.originService, rcvbuf);
   LOG_D(GTPU,
         "[%d] Created listener for paquets to: %s:%s, send buffer size: %d\n",
         sockfd,
