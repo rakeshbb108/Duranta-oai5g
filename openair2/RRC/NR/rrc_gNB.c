@@ -1889,16 +1889,10 @@ static void process_Event_Based_Measurement_Report(gNB_RRC_INST *rrc,
         // CU does not have f1 connection with neighbour cell context. So  check does serving cell has this phyCellId as a
         // neighbour.
         if (!target_cell && neighbour) {
-          // No F1 connection but static neighbour configuration is available
-          const nr_a3_event_t *a3_event_configuration = get_a3_configuration(rrc, neighbour->physicalCellId);
-          /* if no A3 event configured for this physical cell ID, try to get the default one */
-          if (!a3_event_configuration)
-            a3_event_configuration = get_a3_configuration(rrc, -1);
-          // Additional check - This part can be modified according to additional cell specific Handover Margin
-          // a3-Offset and Hysteresis: the actual value is field value * 0.5 dB (TS 38.331 6.3.2)
-          if (a3_event_configuration
-              && ((a3_event_configuration->a3_offset + a3_event_configuration->hysteresis) * 0.5
-                  < (neighbourCellRSRP - servingCellRSRP))) {
+          // No F1 connection but static neighbour configuration is available.
+          // No threshold re-check: the UE applied the A3 entering condition (TS 38.331 5.5.4.4) on unrounded
+          // RSRP and keeps reporting the cell until it leaves, so later reports can be below Off + Hys.
+          {
             if (neighbourCellRSRP > best_rsrp) {
               // UE can send multiple neighbour cells A3 event report in 1 Meas Report. So, we need to find the best neighbour
               best_rsrp = neighbourCellRSRP;
