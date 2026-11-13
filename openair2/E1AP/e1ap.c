@@ -360,7 +360,7 @@ static void e1apCUCP_send_BEARER_CONTEXT_MODIFICATION_REQUEST(sctp_assoc_t assoc
   e1ap_encode_send(CPtype, assoc_id, pdu, 0, __func__);
 }
 
-static int e1apCUUP_send_BEARER_CONTEXT_MODIFICATION_RESPONSE(sctp_assoc_t assoc_id, const e1ap_bearer_modif_resp_t *resp)
+int e1apCUUP_send_BEARER_CONTEXT_MODIFICATION_RESPONSE(sctp_assoc_t assoc_id, const e1ap_bearer_modif_resp_t *resp)
 {
   E1AP_E1AP_PDU_t *pdu = encode_E1_bearer_context_mod_response(resp);
   return e1ap_encode_send(UPtype, assoc_id, pdu, 0, __func__);
