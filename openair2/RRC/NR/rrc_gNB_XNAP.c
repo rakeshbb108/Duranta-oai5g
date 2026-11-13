@@ -235,6 +235,21 @@ static void set_UE_security_algos_xn(const gNB_RRC_INST *rrc,
                UE->ciphering_algorithm, UE->integrity_algorithm);
 }
 
+/** @brief Test switch for a no-forwarding baseline: with XN_HO_NO_DL_FWD=1 in its environment, this
+ *  gNB as Xn HO target declines DL data forwarding (no DL forwarding TNL in the HandoverRequestAck,
+ *  TS 38.423), so the source forwards nothing and the target does not hold NG-U data */
+static bool xn_ho_dl_fwd_declined(void)
+{
+  static int declined = -1;
+  if (declined < 0) {
+    const char *v = getenv("XN_HO_NO_DL_FWD");
+    declined = v && strcmp(v, "1") == 0;
+    if (declined)
+      LOG_W(NR_RRC, "XN_HO_NO_DL_FWD=1: Xn HO target declines DL data forwarding (baseline test)\n");
+  }
+  return declined;
+}
+
 /** @brief Xn HO target: select the source DRBs to keep unchanged (same DRB ID, PDCP SN size and
  *  QoS flows), from the Source DRB to QoS Flow Mapping List (TS 38.423) and the source
  *  radio bearer configuration in HandoverPreparationInformation sourceConfig (TS 38.331).
@@ -300,7 +315,7 @@ static int xn_select_kept_drbs(const gNB_RRC_INST *rrc,
                                 .num_qfi = m->num_qfi,
                                 .default_drb = sd->default_drb,
                                 /* lossless DL forwarding with PDCP SN status: RLC AM only */
-                                .dl_fwd = all_fwd && rlc_mode == XNAP_RLC_MODE_AM};
+                                .dl_fwd = all_fwd && rlc_mode == XNAP_RLC_MODE_AM && !xn_ho_dl_fwd_declined()};
       memcpy(kd->qfi, m->qfi, m->num_qfi);
     }
   }
